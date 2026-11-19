@@ -1,0 +1,15 @@
+# Secrets and personal data never go into the image: configure via container variables instead.
+.env
+.env.*
+!.env.example
+*.swp
+instance/
+*.csv
+.git/
+.github/
+.venv/
+.vscode/
+__pycache__/
+*.pyc
+.pytest_cache/
+unraid/

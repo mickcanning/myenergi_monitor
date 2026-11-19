@@ -139,6 +139,11 @@ def create_app(test_config=None):
             return "", 204
         return redirect(url_for("dashboard"))
 
+    @app.get("/healthz")
+    def healthz():
+        """Liveness check for Docker: answers without calling the myenergi API."""
+        return "ok", 200, {"Content-Type": "text/plain"}
+
     @app.get("/")
     def dashboard():
         try:

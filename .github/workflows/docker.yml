@@ -1,0 +1,81 @@
+name: Docker image
+
+# Tests, builds and publishes ghcr.io/<owner>/myenergi_monitor on every push to main (tag :latest)
+# and for version tags like v1.2.0 (tag :1.2.0).
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run tests
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          pip install -r requirements.txt
+          python tests/test_app.py
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: myenergi_monitor:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test the container
+        run: |
+          mkdir -p appdata && sudo chown root:root appdata
+          docker run -d --name smoke -p 5000:5000 -v "$PWD/appdata:/app/instance" \
+            -e MYENERGI_HUB_SERIAL=1 -e MYENERGI_API_KEY=x myenergi_monitor:test
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:5000/healthz && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:5000/healthz
+          curl -fsS -o /dev/null http://127.0.0.1:5000/upload
+          test "$(stat -c %u appdata/uploads)" = 99     # data folder handed to nobody:users
+          # PID 1 is gunicorn (the entrypoint execs it): it must have dropped root
+          test "$(docker exec smoke awk '/^Uid:/{print $2}' /proc/1/status)" = 99
+          docker logs smoke
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=sha,format=short
+
+      - name: Push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha

@@ -26,7 +26,36 @@ In `.env`, set your **hub serial number** and an **API key** (myaccount.myenergi
 python app.py               # http://127.0.0.1:5000
 ```
 
-It listens on localhost only. Don't expose it to a network: it shows your energy data and uses your API key.
+Run like this, it listens on localhost only. It shows your energy data and uses your API key, so don't expose it to the internet (see Docker below for LAN use).
+
+## Run in Docker / on Unraid
+
+Every push to `main` runs the tests, builds the image, smoke-tests it and publishes it to
+`ghcr.io/mickcanning/myenergi_monitor:latest` (see `.github/workflows/docker.yml`).
+
+**Unraid**
+
+1. Copy `unraid/myenergi-monitor.xml` to `/boot/config/plugins/dockerMan/templates-user/` on the server
+   (e.g. via the `flash` share: `config/plugins/dockerMan/templates-user/`).
+2. **Docker > Add Container**, choose the **myenergi-monitor** template, fill in the hub serial, API key
+   and (optionally) Harvi names, then **Apply**.
+3. Open `http://<unraid-ip>:5000/`.
+
+Data (uploaded logs, the current report, CT choices) is kept in `/mnt/user/appdata/myenergi-monitor`.
+The live CT chart history is in memory and starts again when the container restarts.
+To update: **Docker > myenergi-monitor > Force update** (or let the Auto Update plugin do it).
+
+**Any Docker host**
+
+```bash
+docker run -d --name myenergi-monitor --restart unless-stopped -p 5000:5000 \
+  -v /path/to/appdata:/app/instance \
+  -e MYENERGI_HUB_SERIAL=... -e MYENERGI_API_KEY=... -e HARVI_NAMES="serial=Grid,serial=Solar" \
+  ghcr.io/mickcanning/myenergi_monitor:latest
+```
+
+The container listens on all interfaces so other devices on your LAN can reach it. It has no login,
+so don't port-forward it to the internet; use a VPN (e.g. Unraid's WireGuard or Tailscale) for remote access.
 
 ## Record a log
 
