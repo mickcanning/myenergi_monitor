@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" stroke="#1a9a68" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Zappi">
+  <rect x="10" y="5" width="32" height="54" rx="8" fill="#1a9a68" fill-opacity=".14"/>
+  <rect x="16" y="11" width="20" height="10" rx="2" fill="#1a9a68" fill-opacity=".06"/>
+  <path d="M28 27l-6 10h6l-3 9 8-12h-6l3-7z" fill="#1a9a68" fill-opacity=".06"/>
+  <path d="M42 44c8 0 10 4 10 8v4"/>
+  <rect x="47" y="56" width="10" height="5" rx="1.5" fill="#1a9a68" fill-opacity=".06"/>
+</svg>

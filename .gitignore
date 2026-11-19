@@ -1,0 +1,13 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+instance/
+*.csv
+.pytest_cache/
+# editor swap/backup files (.env.swp holds a copy of your secrets)
+*.swp
+*.swo
+*~
+.DS_Store
+.vscode/

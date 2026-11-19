@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}myenergi monitor{% endblock %}</title>
+  <script>
+    // Apply the theme before first paint so dark doesn't flash white. Until the user picks one,
+    // start from the OS setting.
+    (function () {
+      var saved = null;
+      try { saved = localStorage.getItem("theme"); } catch (e) {}
+      if (saved !== "light" && saved !== "dark") saved = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      document.documentElement.dataset.theme = saved;
+    })();
+  </script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header>
+    <strong>myenergi monitor</strong>
+    <nav>
+      <a href="{{ url_for('dashboard') }}" {% if request.endpoint == 'dashboard' %}class="on"{% endif %}>Live values</a>
+      <a href="{{ report_link }}" {% if request.endpoint in ('upload', 'report') %}class="on"{% endif %}>Log report</a>
+    </nav>
+    <label class="theme-pick">Theme
+      <select id="theme">
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+      </select>
+    </label>
+  </header>
+  <main>{% block content %}{% endblock %}</main>
+  <script>
+    (function () {
+      const root = document.documentElement, pick = document.getElementById("theme");
+      pick.value = root.dataset.theme;
+
+      function apply() {
+        root.dataset.theme = pick.value;
+        // Server-drawn images (the report chart) come in a light and a dark version.
+        document.querySelectorAll("img[data-themed-src]").forEach((img) => {
+          const u = new URL(img.dataset.themedSrc, location.href);
+          if (pick.value === "dark") u.searchParams.set("theme", "dark");
+          if (img.src !== u.href) img.src = u.href;
+        });
+      }
+      pick.addEventListener("change", () => {
+        try { localStorage.setItem("theme", pick.value); } catch (e) {}
+        apply();
+      });
+      apply();
+    })();
+  </script>
+</body>
+</html>

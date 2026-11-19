@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Log report · myenergi monitor{% endblock %}
+{% block content %}
+<h1>Log report</h1>
+<p>Upload a CSV written by <code>monitor.py</code> to draw the Harvi report-age charts.</p>
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+<form method="post" enctype="multipart/form-data" class="panel">
+  <label>Log file (.csv, up to 25 MB)
+    <input type="file" name="log" accept=".csv,text/csv" required>
+  </label>
+  <button type="submit">Generate report</button>
+</form>
+{% if has_current_report %}
+<p><a href="{{ report_link }}">Back to the current report</a></p>
+{% endif %}
+<p class="muted">Uploaded files are kept in this app's <code>instance/uploads</code> folder for 7 days.</p>
+{% endblock %}

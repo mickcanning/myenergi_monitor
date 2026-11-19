@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Live values · myenergi monitor{% endblock %}
+{% block content %}
+<h1>Live values</h1>
+<p class="muted">
+  Latest readings from the myenergi cloud API, refreshed every {{ refresh }} s.
+  <span id="status"></span>
+</p>
+<div id="devices">{% include "_devices.html" %}</div>
+<script>
+  const box = document.getElementById("devices");
+  const status = document.getElementById("status");
+  async function refresh(force) {
+    // Don't rebuild the cards while the user is choosing CTs, or the open panel would collapse.
+    if (!force && document.querySelector("details.ct-config[open]")) return;
+    try {
+      const r = await fetch("{{ url_for('devices_partial') }}", {cache: "no-store"});
+      box.innerHTML = await r.text();
+      status.textContent = "Updated " + new Date().toLocaleTimeString() + (r.ok ? "" : " (error)");
+    } catch (e) {
+      status.textContent = "Refresh failed: " + e;
+    }
+  }
+  box.addEventListener("submit", async (e) => {
+    const form = e.target.closest("form.ct-form");
+    if (!form) return;
+    e.preventDefault();
+    const body = new FormData(form);
+    if (e.submitter && e.submitter.name) body.append(e.submitter.name, e.submitter.value);
+    await fetch(form.action, {method: "POST", body, headers: {"X-Requested-With": "fetch"}});
+    refresh(true);
+  });
+  // CT chart hover: crosshair + tooltip at the nearest reading (delegated, so it survives card refreshes).
+  let hovered = null;
+  function hideTip() {
+    if (!hovered) return;
+    hovered.querySelector(".cross").hidden = hovered.querySelector(".tip").hidden = true;
+    hovered = null;
+  }
+  box.addEventListener("pointermove", (e) => {
+    const plot = e.target.closest(".ct-chart .plot");
+    const fig = plot && plot.closest(".ct-chart");
+    if (fig !== hovered) hideTip();
+    if (!fig) return;
+    hovered = fig;
+    const h = fig._hover || (fig._hover = JSON.parse(fig.dataset.hover));
+    const r = plot.getBoundingClientRect();
+    const pct = (e.clientX - r.left) / r.width * 100;
+    let i = 0;
+    h.x.forEach((x, j) => { if (Math.abs(x - pct) < Math.abs(h.x[i] - pct)) i = j; });
+    const cross = fig.querySelector(".cross"), tip = fig.querySelector(".tip");
+    cross.style.left = h.x[i] + "%";
+    const time = new Date(h.t[i] * 1000).toISOString().slice(11, 19) + " UTC";
+    tip.innerHTML = `<div class="muted">${time}</div>` + h.s.map((s) =>
+      `<div class="${s.cls}"><i></i>${s.name.replace(/[<>&]/g, "")}<b>${s.v[i] == null ? "–" : Math.round(s.v[i]).toLocaleString() + " W"}</b></div>`
+    ).join("");
+    cross.hidden = tip.hidden = false;
+    const left = h.x[i] / 100 * r.width;
+    tip.style.left = (left > r.width / 2 ? left - tip.offsetWidth - 8 : left + 8) + "px";
+  });
+  box.addEventListener("pointerleave", hideTip);
+  setInterval(() => refresh(false), {{ refresh * 1000 }});
+</script>
+{% endblock %}

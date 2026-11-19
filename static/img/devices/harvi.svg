@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" stroke="#b37a00" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Harvi">
+  <rect x="8" y="22" width="30" height="34" rx="6" fill="#b37a00" fill-opacity=".14"/>
+  <circle cx="23" cy="39" r="4" fill="#b37a00" fill-opacity=".06"/>
+  <path d="M44 20a10 10 0 0 1 0 14M49 15a17 17 0 0 1 0 24"/>
+  <path d="M23 22V12"/>
+  <circle cx="23" cy="9" r="4" fill="#b37a00" fill-opacity=".06"/>
+</svg>

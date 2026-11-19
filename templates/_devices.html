@@ -1,0 +1,104 @@
+{% if error %}
+  <p class="error" role="alert">{{ error }}</p>
+{% elif not devices %}
+  <p class="muted">The API returned no devices.</p>
+{% endif %}
+<div class="cards">
+{% for d in devices %}
+  <section class="card kind-{{ d.kind }}">
+    <div class="card-head">
+      <img class="device-img" src="{{ d.image }}" alt="" width="56" height="56">
+      <h2>
+        {{ d.name or d.label }}
+        <span class="muted">{{ d.label if d.name else '' }} {{ d.sno }}</span>
+      </h2>
+    </div>
+    <p class="age {{ d.freshness }}">
+      {% if d.age_s is none %}No report time
+      {% else %}Last report {{ '%.0f' % d.age_s }} s ago ({{ d.report_utc }} UTC){% endif %}
+      <span class="badge {{ d.freshness }}">{{ d.freshness }}</span>
+    </p>
+    {% if d.cts %}
+      {% set shown = d.cts | selectattr('shown') | list %}
+      {% if shown %}
+      <table>
+        <thead><tr><th>CT</th><th>Assigned to</th><th class="num">Reading (W)</th></tr></thead>
+        <tbody>
+        {% for ct in shown %}
+          <tr><td>{{ ct.slot }}</td><td>{{ ct.name }}</td><td class="num">{{ ct.watts }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+        <p class="muted">No CTs selected.</p>
+      {% endif %}
+      {% set ch = d.ct_chart %}
+      {% if ch and ch.waiting %}
+        <p class="muted ct-wait">CT load chart: collecting readings ({{ ch.count }} so far, needs 2)…</p>
+      {% elif ch %}
+      <figure class="ct-chart" data-hover='{{ ch.hover }}'>
+        <figcaption>
+          <span>CT load (W) <span class="muted">· last {{ ch.minutes }} min</span></span>
+          {% if ch.series | length > 1 %}
+          <span class="legend">
+            {% for s in ch.series %}<span class="{{ s.cls }}"><i></i>CT {{ s.slot }} {{ s.name }}</span>{% endfor %}
+          </span>
+          {% endif %}
+        </figcaption>
+        <div class="plot">
+          {% for t in ch.ticks %}
+            <span class="tick" style="top:{{ t.top }}%">{{ t.label }}</span>
+          {% endfor %}
+          <svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
+            {% for t in ch.ticks %}
+              <line class="{{ 'zero' if t.zero else 'grid' }}" x1="0" x2="1000" y1="{{ t.top }}" y2="{{ t.top }}"/>
+            {% endfor %}
+            {% for s in ch.series %}
+              <path class="{{ s.cls }}" d="{{ s.path }}"/>
+            {% endfor %}
+          </svg>
+          <div class="cross" hidden></div>
+          <div class="tip" hidden></div>
+        </div>
+        <div class="xaxis muted"><span>{{ ch.start }}</span><span>{{ ch.end }} UTC</span></div>
+      </figure>
+      {% endif %}
+      <details class="ct-config">
+        <summary>CTs shown
+          ({{ shown | length }} of {{ d.cts | length }}, {{ 'chosen by you' if d.ct_mode == 'custom' else 'automatic' }})
+        </summary>
+        <form class="ct-form" method="post" action="{{ url_for('set_ct_prefs', kind=d.kind, sno=d.sno) }}">
+          {% for ct in d.cts %}
+            <label class="check">
+              <input type="checkbox" name="slot" value="{{ ct.slot }}" {% if ct.shown %}checked{% endif %}>
+              CT {{ ct.slot }}: {{ ct.name }} ({{ ct.watts }} W)
+            </label>
+          {% endfor %}
+          <div class="row">
+            <button type="submit">Save</button>
+            <button type="submit" name="auto" value="1" class="secondary">Use automatic</button>
+          </div>
+          <p class="muted">Automatic shows the CTs that have a purpose assigned (not "None").</p>
+        </form>
+      </details>
+    {% endif %}
+    {% if d.voltage_v is not none or d.frequency_hz is not none %}
+    <p>
+      {% if d.voltage_v is not none %}Voltage {{ '%.1f' % d.voltage_v }} V{% endif %}
+      {% if d.frequency_hz is not none %}&nbsp; Frequency {{ '%.2f' % d.frequency_hz }} Hz{% endif %}
+      <span class="muted">(units auto-scaled)</span>
+    </p>
+    {% endif %}
+    {% if d.extra %}
+    <details>
+      <summary>All other fields ({{ d.extra|length }})</summary>
+      <table class="fields">
+        {% for k, v in d.extra.items() %}
+          <tr><td>{{ k }}</td><td>{{ v }}</td></tr>
+        {% endfor %}
+      </table>
+    </details>
+    {% endif %}
+  </section>
+{% endfor %}
+</div>

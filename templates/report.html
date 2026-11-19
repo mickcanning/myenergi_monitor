@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Report · myenergi monitor{% endblock %}
+{% block content %}
+<h1>Log report</h1>
+<p class="muted">
+  {{ stats.polls }} polls from {{ stats.start.strftime('%Y-%m-%d %H:%M') }} to {{ stats.end.strftime('%Y-%m-%d %H:%M') }} UTC.
+  {% if stats.eddi_max_age is not none %}Eddi's report was never more than {{ '%.0f' % stats.eddi_max_age }} s old.{% endif %}
+</p>
+
+<details class="panel">
+  <summary>Upload a new log</summary>
+  <form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data" class="controls">
+    <label>Log file (.csv)
+      <input type="file" name="log" accept=".csv,text/csv" required>
+    </label>
+    <button type="submit">Generate report</button>
+  </form>
+  <p class="muted">This report stays here until you upload a new log.</p>
+</details>
+
+<form method="get" class="panel controls">
+  <label>Grid Harvi
+    <select name="grid">
+      {% for s in serials %}
+        <option value="{{ s }}" {% if s == params.grid_sno %}selected{% endif %}>{{ names.get(s) ~ ' (' ~ s ~ ')' if names.get(s) else s }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Threshold line (s) <input type="number" name="thresh" value="{{ '%g' % params.thresh_s }}" min="1" step="any"></label>
+  <label>Concern: silence at least (s) <input type="number" name="gap" value="{{ '%g' % params.gap_s }}" min="1" step="any"></label>
+  <label>&hellip; with more than (W) <input type="number" name="ct" value="{{ '%g' % params.ct_w }}" min="0" step="any"></label>
+  <label>Night from (h) <input type="number" name="ns" value="{{ params.night_start }}" min="0" max="23"></label>
+  <label>to (h) <input type="number" name="ne" value="{{ params.night_end }}" min="0" max="23"></label>
+  <button type="submit">Update</button>
+</form>
+
+<img class="chart" data-themed-src="{{ url_for('report_png', log_id=log_id) }}?{{ query }}" alt="Harvi report age and CT power over time">
+<noscript><img class="chart" src="{{ url_for('report_png', log_id=log_id) }}?{{ query }}" alt="Harvi report age and CT power over time"></noscript>
+<p><a href="{{ url_for('report_png', log_id=log_id) }}?{{ query }}" download>Download PNG</a></p>
+
+<h2>Per Harvi</h2>
+<table>
+  <thead><tr>
+    <th>Harvi</th><th class="num">Median age (s)</th><th class="num">95th pct (s)</th><th class="num">Max age (s)</th>
+    <th class="num">% polls over {{ '%g' % params.thresh_s }} s</th><th class="num">Same, night only</th>
+    <th class="num">Max silence (s)</th><th class="num">Silences over threshold</th>
+  </tr></thead>
+  <tbody>
+  {% for h in stats.harvis %}
+    <tr>
+      <td>{{ names.get(h.sno) or h.sno }}{% if h.is_grid %} <span class="badge fresh">grid</span>{% endif %}</td>
+      <td class="num">{{ '%.0f' % h.median_age }}</td><td class="num">{{ '%.0f' % h.p95_age }}</td>
+      <td class="num">{{ '%.0f' % h.max_age }}</td>
+      <td class="num">{{ '%.1f' % h.pct_over }}%</td>
+      <td class="num">{{ '%.1f%%' % h.night_pct_over if h.night_pct_over is not none else '-' }}</td>
+      <td class="num">{{ '%.0f' % h.max_gap }}</td>
+      <td class="num">{{ h.silences_over }} of {{ h.silences }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>Gaps of concern (grid Harvi)</h2>
+<p class="muted">
+  Silences of at least {{ '%g' % params.gap_s }} s while more than {{ '%g' % params.ct_w }} W flowed in the CT
+  on both sides, so low harvested power doesn't explain them.
+</p>
+{% if stats.concerns %}
+<table>
+  <thead><tr><th>Silence ended (UTC)</th><th class="num">Length (s)</th><th class="num">CT before (W)</th><th class="num">CT after (W)</th></tr></thead>
+  <tbody>
+  {% for e in stats.concerns %}
+    <tr><td>{{ e.end.strftime('%Y-%m-%d %H:%M:%S') }}</td><td class="num">{{ '%.0f' % e.gap }}</td>
+        <td class="num">{{ '%.0f' % e.ct_before }}</td><td class="num">{{ '%.0f' % e.ct_after }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>None found with these settings.</p>
+{% endif %}
+{% endblock %}

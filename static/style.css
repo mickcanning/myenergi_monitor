@@ -1,0 +1,77 @@
+/* Theme tokens: light by default, dark when <html data-theme="dark"> (set by the theme menu). */
+:root {
+  color-scheme:light;
+  --ink:#0b0b0b; --ink2:#52514e; --line:#e6e5e1; --surface:#fcfcfb; --card:#fff; --blue:#2a78d6;
+  --error-bg:#fbeaea; --error-line:#e34948; --zero:#b8b7b2; --shadow:rgb(0 0 0 / .08);
+  --good:#0c8a5b; --warn-line:#b37a00; --warn:#8a5e00; --bad-line:#c0392b; --bad:#a02b20;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a;   /* CT 1-3 chart lines: colour follows the slot */
+}
+:root[data-theme="dark"] {
+  color-scheme:dark;
+  --ink:#f0efec; --ink2:#c3c2b7; --line:#383835; --surface:#0d0d0d; --card:#1a1a19; --blue:#3987e5;
+  --error-bg:#3a1e1e; --error-line:#e66767; --zero:#6b6a65; --shadow:rgb(0 0 0 / .5);
+  --good:#2fbf71; --warn-line:#c98500; --warn:#e0a526; --bad-line:#e66767; --bad:#f08a8a;
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70;
+}
+* { box-sizing: border-box; }
+body { margin:0; font:15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color:var(--ink); background:var(--surface); }
+header { display:flex; gap:2rem; align-items:center; padding:.75rem 1.5rem; border-bottom:1px solid var(--line); }
+nav a { margin-right:1rem; color:var(--ink2); text-decoration:none; padding-bottom:2px; }
+header nav { flex:1; }
+.theme-pick { flex-direction:row; align-items:center; gap:.4rem; }
+.theme-pick select { padding:.2rem .4rem; }
+nav a.on { color:var(--ink); border-bottom:2px solid var(--blue); }
+main { max-width:1100px; margin:0 auto; padding:1rem 1.5rem 3rem; }
+h1 { font-size:1.4rem; } h2 { font-size:1.1rem; margin-top:1.5rem; }
+.muted { color:var(--ink2); font-weight:normal; font-size:.9em; }
+.error { background:var(--error-bg); border:1px solid var(--error-line); padding:.6rem .8rem; border-radius:6px; }
+.cards { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:1rem; }
+/* Harvis always start a new row, so the other devices sit above them. */
+.cards > .card:not(.kind-harvi) + .kind-harvi { grid-column-start:1; }
+@media (max-width: 700px) { .cards { grid-template-columns:1fr; } }
+.card, .panel { border:1px solid var(--line); border-radius:8px; padding:.8rem 1rem; background:var(--card); }
+.card h2 { margin:.1rem 0 .4rem; }
+.badge { font-size:.75rem; padding:1px 7px; border-radius:10px; border:1px solid var(--line); margin-left:.4rem; }
+.badge.fresh { border-color:var(--good); color:var(--good); }
+.badge.delayed { border-color:var(--warn-line); color:var(--warn); }
+.badge.silent { border-color:var(--bad-line); color:var(--bad); }
+table { border-collapse:collapse; width:100%; margin:.4rem 0; }
+th, td { text-align:left; padding:.3rem .5rem; border-bottom:1px solid var(--line); }
+th { color:var(--ink2); font-weight:600; font-size:.85em; }
+.num { text-align:right; font-variant-numeric:tabular-nums; }
+.fields td:first-child { color:var(--ink2); width:40%; }
+.controls { display:flex; flex-wrap:wrap; gap:.8rem 1.2rem; align-items:end; margin:1rem 0; }
+label { display:flex; flex-direction:column; font-size:.85em; color:var(--ink2); gap:.2rem; }
+input, select, button { font:inherit; padding:.3rem .5rem; }
+input, select { color:var(--ink); background:var(--card); border:1px solid var(--line); border-radius:6px; }
+input[type=number] { width:7rem; }
+button { cursor:pointer; background:var(--blue); color:#fff; border:0; border-radius:6px; padding:.4rem .9rem; }
+.ct-config { margin:.4rem 0; }
+.ct-config summary { cursor:pointer; color:var(--ink2); font-size:.9em; }
+.check { flex-direction:row; align-items:center; gap:.5rem; color:var(--ink); font-size:.95em; margin:.25rem 0; }
+.row { display:flex; gap:.5rem; margin:.5rem 0; }
+button.secondary { background:var(--card); color:var(--ink); border:1px solid var(--line); }
+.chart { max-width:100%; height:auto; border:1px solid var(--line); border-radius:8px; background:var(--card); }
+.card-head { display:flex; align-items:center; gap:.75rem; margin-bottom:.2rem; }
+.card-head h2 { margin:0; }
+.device-img { width:56px; height:56px; flex:none; object-fit:contain; border-radius:8px; }
+.ct-chart { margin:.6rem 0 .4rem; }
+.ct-chart figcaption { display:flex; flex-wrap:wrap; justify-content:space-between; gap:.2rem .8rem; font-size:.85em; font-weight:600; margin-bottom:.3rem; }
+.ct-chart .legend { display:flex; flex-wrap:wrap; gap:.2rem .7rem; font-weight:normal; color:var(--ink2); }
+.ct-chart .legend i { display:inline-block; width:10px; height:3px; border-radius:2px; margin-right:.3rem; vertical-align:middle; }
+.ct-chart .plot { position:relative; height:110px; margin-left:3.2rem; }
+.ct-chart svg { position:absolute; inset:0; width:100%; height:100%; overflow:visible; }
+.ct-chart svg line, .ct-chart svg path { vector-effect:non-scaling-stroke; fill:none; }
+.ct-chart svg line.grid { stroke:var(--line); stroke-width:1; }
+.ct-chart svg line.zero { stroke:var(--zero); stroke-width:1; }
+.ct-chart svg path { stroke-width:2; stroke-linejoin:round; stroke-linecap:round; }
+.ct-chart .tick { position:absolute; right:calc(100% + .4rem); transform:translateY(-50%); font-size:.72rem; color:var(--ink2); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.ct-chart .xaxis { display:flex; justify-content:space-between; margin-left:3.2rem; font-size:.72rem; }
+.ct-chart .cross { position:absolute; top:0; bottom:0; width:1px; background:var(--ink2); pointer-events:none; }
+.ct-chart .tip { position:absolute; top:0; z-index:2; pointer-events:none; background:var(--card); color:var(--ink); border:1px solid var(--line); border-radius:6px; padding:.3rem .5rem; font-size:.78rem; white-space:nowrap; box-shadow:0 2px 8px var(--shadow); }
+.ct-chart .tip i { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:.35rem; }
+.ct-chart .tip b { font-variant-numeric:tabular-nums; margin-left:.4rem; }
+.ct-wait { font-size:.85em; }
+.s1 { --c:var(--s1); } .s2 { --c:var(--s2); } .s3 { --c:var(--s3); }
+.ct-chart svg path { stroke:var(--c); }
+.ct-chart .legend i, .ct-chart .tip i { background:var(--c); }
