@@ -3,7 +3,7 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     MPLCONFIGDIR=/tmp/matplotlib \
-    PORT=5000 \
+    PORT=5001 \
     PUID=99 \
     PGID=100
 
@@ -14,10 +14,10 @@ COPY . .
 
 # Uploaded logs, the current report and CT choices live here: map it to appdata to keep them.
 VOLUME /app/instance
-EXPOSE 5000
+EXPOSE 5001
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
-  CMD python -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/healthz' % os.environ.get('PORT', '5000'), timeout=4)"
+  CMD python -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/healthz' % os.environ.get('PORT', '5001'), timeout=4)"
 
 # Starts as root only to fix ownership of the data folder, then runs as PUID:PGID (Unraid's nobody:users).
 ENTRYPOINT ["python", "/app/docker-entrypoint.py"]

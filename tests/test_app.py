@@ -41,7 +41,7 @@ class FakeClient:
 
 def make_app(tmp_path):
     a = app_module.create_app({"TESTING": True, "UPLOAD_DIR": str(tmp_path), "HUB_SERIAL": "1", "API_KEY": "k",
-                               "HARVI_NAMES": {"111": "Grid", "222": "Solar & Battery"}})
+                               "HARVI_NAMES": {"111": "Grid", "222": "Solar & Battery"}, "APP_PASSWORD": ""})
     a.extensions["client"] = FakeClient()
     return a
 
@@ -222,10 +222,84 @@ def test_client_ignores_undefined_server_name():
         raise AssertionError("expected MyEnergiError")
 
 
+def test_behind_proxy(tmp_path):
+    def scheme_seen(proxy):
+        a = make_app(tmp_path) if not proxy else app_module.create_app(
+            {"TESTING": True, "UPLOAD_DIR": str(tmp_path), "HUB_SERIAL": "1", "API_KEY": "k", "BEHIND_PROXY": True, "APP_PASSWORD": ""})
+        a.add_url_rule("/_scheme", "_scheme", lambda: __import__("flask").request.url_root)
+        return a.test_client().get("/_scheme", headers={"X-Forwarded-Proto": "https",
+                                                         "X-Forwarded-Host": "energy.example.com"}).get_data(as_text=True)
+    assert scheme_seen(False) == "http://localhost/"                 # headers ignored unless enabled
+    assert scheme_seen(True) == "https://energy.example.com/"
+
+
+def make_locked_app(tmp_path, password="s3cret pass", **extra):
+    a = app_module.create_app({"TESTING": True, "UPLOAD_DIR": str(tmp_path / "up"), "HUB_SERIAL": "1", "API_KEY": "k",
+                               "APP_PASSWORD": password, "SECRET_KEY_FILE": str(tmp_path / "secret_key"),
+                               "AUTH_FAIL_DELAY": 0, **extra})
+    a.extensions["client"] = FakeClient()
+    return a
+
+
+def test_login(tmp_path):
+    a = make_locked_app(tmp_path)
+    c = a.test_client()
+    # signed out: pages redirect to the login form, background calls get 401, health check stays open
+    r = c.get("/report/abc?x=1")
+    assert r.status_code == 302 and "/login?next=/report/abc?x%3D1" in r.headers["Location"]
+    assert c.get("/api/status").status_code == 401
+    assert c.get("/partials/devices").status_code == 401
+    assert c.post("/ct-prefs/eddi/999", data={}).status_code == 401
+    assert c.get("/healthz").status_code == 200
+    assert c.get("/static/style.css").status_code == 200
+    page = c.get("/login").get_data(as_text=True)
+    assert 'type="password"' in page and "Live values" not in page and "Sign out" not in page
+    # wrong password, then the right one (going back to where we were headed)
+    assert c.post("/login", data={"password": "nope"}).status_code == 401
+    r = c.post("/login", data={"password": "s3cret pass", "next": "/upload"})
+    assert r.status_code == 302 and r.headers["Location"].endswith("/upload")
+    cookie = r.headers["Set-Cookie"]
+    assert "HttpOnly" in cookie and "SameSite=Lax" in cookie and "Secure" not in cookie   # plain http here
+    assert c.get("/api/status").status_code == 200
+    assert "Sign out" in c.get("/").get_data(as_text=True)
+    # off-site "next" targets are ignored
+    c2 = a.test_client()
+    for bad in ("//evil.com", "https://evil.com/", "/\\evil.com"):
+        r = c2.post("/login", data={"password": "s3cret pass", "next": bad})
+        assert r.headers["Location"] == "/", bad
+        c2.post("/logout")
+    # sign out
+    c.post("/logout")
+    assert c.get("/api/status").status_code == 401
+    # the signing key persists, so a restart keeps you signed in; a new password signs everyone out
+    c.post("/login", data={"password": "s3cret pass"})
+    a2 = make_locked_app(tmp_path)
+    c3 = a2.test_client()
+    c3.set_cookie("session", c.get_cookie("session").value)
+    assert c3.get("/api/status").status_code == 200
+    a3 = make_locked_app(tmp_path, password="changed")
+    c4 = a3.test_client()
+    c4.set_cookie("session", c.get_cookie("session").value)
+    assert c4.get("/api/status").status_code == 401
+
+
+def test_login_secure_cookie_and_throttle(tmp_path):
+    a = make_locked_app(tmp_path, BEHIND_PROXY=True)
+    c = a.test_client()
+    r = c.post("/login", data={"password": "s3cret pass"}, headers={"X-Forwarded-Proto": "https"})
+    assert "Secure" in r.headers["Set-Cookie"]                       # served over https via the proxy
+    c = a.test_client()
+    for _ in range(5):
+        assert c.post("/login", data={"password": "wrong"}).status_code == 401
+    r = c.post("/login", data={"password": "s3cret pass"})            # locked out, even with the right one
+    assert r.status_code == 429 and "Too many" in r.get_data(as_text=True)
+
+
 if __name__ == "__main__":
     import tempfile
     for fn in (test_dashboard_and_api, test_upload_and_report, test_current_report_persists,
-               test_ct_choice, test_ct_chart_builds_up, test_upload_rejects_bad_files):
+               test_ct_choice, test_ct_chart_builds_up, test_upload_rejects_bad_files, test_behind_proxy,
+               test_login, test_login_secure_cookie_and_throttle):
         with tempfile.TemporaryDirectory() as d:
             fn(Path(d))
             print("ok", fn.__name__)

@@ -20,8 +20,10 @@
   <header>
     <strong>myenergi monitor</strong>
     <nav>
+      {% if request.endpoint != 'login' %}
       <a href="{{ url_for('dashboard') }}" {% if request.endpoint == 'dashboard' %}class="on"{% endif %}>Live values</a>
       <a href="{{ report_link }}" {% if request.endpoint in ('upload', 'report') %}class="on"{% endif %}>Log report</a>
+      {% endif %}
     </nav>
     <label class="theme-pick">Theme
       <select id="theme">
@@ -29,6 +31,11 @@
         <option value="dark">Dark</option>
       </select>
     </label>
+    {% if auth_enabled and signed_in %}
+    <form method="post" action="{{ url_for('logout') }}" class="signout">
+      <button type="submit" class="secondary">Sign out</button>
+    </form>
+    {% endif %}
   </header>
   <main>{% block content %}{% endblock %}</main>
   <script>

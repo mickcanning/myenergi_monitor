@@ -11,6 +11,7 @@ from flask import Flask, abort, jsonify, redirect, render_template, request, sen
 import io
 
 import charts
+from auth import init_auth
 import live_chart
 from devices import summarise
 from myenergi_client import MyEnergiClient, MyEnergiError
@@ -63,7 +64,13 @@ def create_app(test_config=None):
     )
     if test_config:
         app.config.update(test_config)
+    if app.config.get("BEHIND_PROXY", os.environ.get("BEHIND_PROXY", "").lower() in ("1", "true", "yes")):
+        # Behind a reverse proxy (e.g. nginx doing HTTPS): trust one hop of X-Forwarded-* headers so the app
+        # sees the real scheme, host and client address. Only enable this when a proxy is in front.
+        from werkzeug.middleware.proxy_fix import ProxyFix
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
     os.makedirs(app.config["UPLOAD_DIR"], exist_ok=True)
+    init_auth(app)   # no-op unless APP_PASSWORD is set
 
     def get_client():
         if "client" not in app.extensions:
@@ -285,4 +292,4 @@ def create_app(test_config=None):
 
 if __name__ == "__main__":
     # Bound to localhost only: the page shows your energy data and uses your API key.
-    create_app().run(host="127.0.0.1", port=int(os.environ.get("PORT", "5000")), debug=False)
+    create_app().run(host="127.0.0.1", port=int(os.environ.get("PORT", "5001")), debug=False)

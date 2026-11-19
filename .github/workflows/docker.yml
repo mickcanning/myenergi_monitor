@@ -43,14 +43,14 @@ jobs:
       - name: Smoke test the container
         run: |
           mkdir -p appdata && sudo chown root:root appdata
-          docker run -d --name smoke -p 5000:5000 -v "$PWD/appdata:/app/instance" \
+          docker run -d --name smoke -p 5001:5001 -v "$PWD/appdata:/app/instance" \
             -e MYENERGI_HUB_SERIAL=1 -e MYENERGI_API_KEY=x myenergi_monitor:test
           for i in $(seq 1 30); do
-            curl -fsS http://127.0.0.1:5000/healthz && break
+            curl -fsS http://127.0.0.1:5001/healthz && break
             sleep 1
           done
-          curl -fsS http://127.0.0.1:5000/healthz
-          curl -fsS -o /dev/null http://127.0.0.1:5000/upload
+          curl -fsS http://127.0.0.1:5001/healthz
+          curl -fsS -o /dev/null http://127.0.0.1:5001/upload
           test "$(stat -c %u appdata/uploads)" = 99     # data folder handed to nobody:users
           # PID 1 is gunicorn (the entrypoint execs it): it must have dropped root
           test "$(docker exec smoke awk '/^Uid:/{print $2}' /proc/1/status)" = 99

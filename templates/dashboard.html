@@ -15,6 +15,7 @@
     if (!force && document.querySelector("details.ct-config[open]")) return;
     try {
       const r = await fetch("{{ url_for('devices_partial') }}", {cache: "no-store"});
+      if (r.status === 401) return location.reload();   // signed out: reload into the login page
       box.innerHTML = await r.text();
       status.textContent = "Updated " + new Date().toLocaleTimeString() + (r.ok ? "" : " (error)");
     } catch (e) {
@@ -27,7 +28,8 @@
     e.preventDefault();
     const body = new FormData(form);
     if (e.submitter && e.submitter.name) body.append(e.submitter.name, e.submitter.value);
-    await fetch(form.action, {method: "POST", body, headers: {"X-Requested-With": "fetch"}});
+    const r = await fetch(form.action, {method: "POST", body, headers: {"X-Requested-With": "fetch"}});
+    if (r.status === 401) return location.reload();
     refresh(true);
   });
   // CT chart hover: crosshair + tooltip at the nearest reading (delegated, so it survives card refreshes).

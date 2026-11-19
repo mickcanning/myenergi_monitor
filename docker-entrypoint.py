@@ -6,7 +6,7 @@ so several workers would each hold a different, partial history. Threads handle 
 import os
 
 DATA = "/app/instance"
-port = os.environ.get("PORT", "5000")
+port = os.environ.get("PORT", "5001")
 uid, gid = int(os.environ.get("PUID", "99")), int(os.environ.get("PGID", "100"))
 
 os.makedirs(os.path.join(DATA, "uploads"), exist_ok=True)

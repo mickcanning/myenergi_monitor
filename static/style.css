@@ -75,3 +75,8 @@ button.secondary { background:var(--card); color:var(--ink); border:1px solid va
 .s1 { --c:var(--s1); } .s2 { --c:var(--s2); } .s3 { --c:var(--s3); }
 .ct-chart svg path { stroke:var(--c); }
 .ct-chart .legend i, .ct-chart .tip i { background:var(--c); }
+.signout { margin:0; }
+.signout button { padding:.2rem .7rem; font-size:.9em; }
+.login { max-width:22rem; margin:3rem auto; display:flex; flex-direction:column; gap:.9rem; }
+.login h1 { margin:0; }
+.login input { width:100%; }

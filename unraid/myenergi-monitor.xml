@@ -9,17 +9,19 @@
   <Shell>sh</Shell>
   <Privileged>false</Privileged>
   <Project>https://github.com/mickcanning/myenergi_monitor</Project>
-  <Overview>Live myenergi device values with CT load charts, and Harvi link reports from monitor.py logs. LAN use only: it has no login.</Overview>
+  <Overview>Live myenergi device values with CT load charts, and Harvi link reports from monitor.py logs. Set an app password to require a login.</Overview>
   <Category>Tools: HomeAutomation:</Category>
-  <WebUI>http://[IP]:[PORT:5000]/</WebUI>
+  <WebUI>http://[IP]:[PORT:5001]/</WebUI>
   <Icon>https://raw.githubusercontent.com/mickcanning/myenergi_monitor/main/static/img/devices/eddi.svg</Icon>
-  <Config Name="Web UI port" Target="5000" Default="5000" Mode="tcp" Description="Port for the web page" Type="Port" Display="always" Required="true" Mask="false">5000</Config>
+  <Config Name="Web UI port" Target="5001" Default="5001" Mode="tcp" Description="Port for the web page" Type="Port" Display="always" Required="true" Mask="false">5001</Config>
   <Config Name="App data" Target="/app/instance" Default="/mnt/user/appdata/myenergi-monitor" Mode="rw" Description="Uploaded logs, current report and CT choices" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/myenergi-monitor</Config>
   <Config Name="Hub serial" Target="MYENERGI_HUB_SERIAL" Default="" Mode="" Description="Your hub serial number" Type="Variable" Display="always" Required="true" Mask="false"/>
   <Config Name="API key" Target="MYENERGI_API_KEY" Default="" Mode="" Description="myaccount.myenergi.com &gt; Products &gt; Advanced" Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="App password" Target="APP_PASSWORD" Default="" Mode="" Description="Password for the web page (leave blank for no login). Changing it signs everyone out." Type="Variable" Display="always" Required="false" Mask="true"/>
   <Config Name="Harvi names" Target="HARVI_NAMES" Default="" Mode="" Description="Optional: serial=name,serial=name (a name containing 'grid' marks the grid Harvi)" Type="Variable" Display="always" Required="false" Mask="false"/>
   <Config Name="Grid Harvi serial" Target="GRID_HARVI_SNO" Default="" Mode="" Description="Optional: default grid Harvi in log reports" Type="Variable" Display="advanced" Required="false" Mask="false"/>
   <Config Name="Refresh seconds" Target="REFRESH_SECONDS" Default="15" Mode="" Description="Live page refresh interval" Type="Variable" Display="advanced" Required="false" Mask="false">15</Config>
+  <Config Name="Behind proxy" Target="BEHIND_PROXY" Default="1" Mode="" Description="1 when served through a reverse proxy (nginx) doing HTTPS; 0 when accessed directly" Type="Variable" Display="advanced" Required="false" Mask="false">1</Config>
   <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="User the app runs as (99 = nobody)" Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
   <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="Group the app runs as (100 = users)" Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
 </Container>
