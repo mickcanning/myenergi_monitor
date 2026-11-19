@@ -1,24 +1,51 @@
 {% extends "base.html" %}
-{% block title %}Report · myenergi monitor{% endblock %}
+{% block title %}Graphs · myenergi monitor{% endblock %}
 {% block content %}
-<h1>Log report</h1>
+<h1>Graphs</h1>
+{% if source == 'stored' %}
 <p class="muted">
-  {{ stats.polls }} polls from {{ stats.start.strftime('%Y-%m-%d %H:%M') }} to {{ stats.end.strftime('%Y-%m-%d %H:%M') }} UTC.
+  From recorded data: {{ stats.polls }} polls from {{ stats.start.strftime('%Y-%m-%d %H:%M') }} to {{ stats.end.strftime('%Y-%m-%d %H:%M') }} UTC.
   {% if stats.eddi_max_age is not none %}Eddi's report was never more than {{ '%.0f' % stats.eddi_max_age }} s old.{% endif %}
+  {% if stats.recording_gaps %}Not recording for {{ stats.recording_gap_s | duration }} in this range ({{ stats.recording_gaps | length }} pause{{ 's' if stats.recording_gaps | length != 1 }}, hatched on the chart).{% endif %}
+  {% include "_recording.html" %}
 </p>
+{% if rng.note %}<p class="notice" role="status">{{ rng.note }}</p>{% endif %}
+{% else %}
+<p class="muted">
+  From an uploaded log: {{ stats.polls }} polls from {{ stats.start.strftime('%Y-%m-%d %H:%M') }} to {{ stats.end.strftime('%Y-%m-%d %H:%M') }} UTC.
+  {% if stats.eddi_max_age is not none %}Eddi's report was never more than {{ '%.0f' % stats.eddi_max_age }} s old.{% endif %}
+  {% if stats.recording_gaps %}Not recording for {{ stats.recording_gap_s | duration }} ({{ stats.recording_gaps | length }} pause{{ 's' if stats.recording_gaps | length != 1 }}, hatched on the chart).{% endif %}
+  <a href="{{ url_for('stored_report') }}">Report on recorded data instead</a>
+</p>
+{% endif %}
 
 <details class="panel">
-  <summary>Upload a new log</summary>
+  <summary>Upload a log from monitor.py instead</summary>
   <form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data" class="controls">
     <label>Log file (.csv)
       <input type="file" name="log" accept=".csv,text/csv" required>
     </label>
     <button type="submit">Generate report</button>
   </form>
-  <p class="muted">This report stays here until you upload a new log.</p>
+  <p class="muted">Only needed for logs recorded elsewhere: this app records continuously on its own.</p>
 </details>
 
 <form method="get" class="panel controls">
+  {% if source == 'stored' %}
+  <div class="range">
+    <label>From (UTC) <input type="datetime-local" name="from" value="{{ rng.from_s }}"
+      min="{{ rng.lo.strftime('%Y-%m-%dT%H:%M') }}" max="{{ rng.hi.strftime('%Y-%m-%dT%H:%M') }}" required></label>
+    <label>To (UTC) <input type="datetime-local" name="to" value="{{ rng.to_s }}"
+      min="{{ rng.lo.strftime('%Y-%m-%dT%H:%M') }}" max="{{ rng.hi.strftime('%Y-%m-%dT%H:%M') }}" required></label>
+    <span class="presets">
+      {% for label, p in rng.presets %}
+        {% set args = request.args.to_dict() %}{% set _ = args.update(p) %}
+        <a href="{{ url_for('stored_report', **args) }}" {% if p['from'] == rng.from_s and p['to'] == rng.to_s %}class="on"{% endif %}>{{ label }}</a>
+      {% endfor %}
+    </span>
+    <span class="muted">Recorded data: {{ rng.lo.strftime('%Y-%m-%d %H:%M') }} to {{ rng.hi.strftime('%Y-%m-%d %H:%M') }} UTC</span>
+  </div>
+  {% endif %}
   <label>Grid Harvi
     <select name="grid">
       {% for s in serials %}
@@ -34,9 +61,9 @@
   <button type="submit">Update</button>
 </form>
 
-<img class="chart" data-themed-src="{{ url_for('report_png', log_id=log_id) }}?{{ query }}" alt="Harvi report age and CT power over time">
-<noscript><img class="chart" src="{{ url_for('report_png', log_id=log_id) }}?{{ query }}" alt="Harvi report age and CT power over time"></noscript>
-<p><a href="{{ url_for('report_png', log_id=log_id) }}?{{ query }}" download>Download PNG</a></p>
+<img class="chart" data-themed-src="{{ png_url }}?{{ query }}" alt="Harvi report age and CT power over time">
+<noscript><img class="chart" src="{{ png_url }}?{{ query }}" alt="Harvi report age and CT power over time"></noscript>
+<p><a href="{{ png_url }}?{{ query }}" download>Download PNG</a></p>
 
 <h2>Per Harvi</h2>
 <table>
@@ -63,14 +90,15 @@
 <h2>Gaps of concern (grid Harvi)</h2>
 <p class="muted">
   Silences of at least {{ '%g' % params.gap_s }} s while more than {{ '%g' % params.ct_w }} W flowed in the CT
-  on both sides, so low harvested power doesn't explain them.
+  on both sides, so low harvested power doesn't explain them. Only time while polling was running counts:
+  a silence that runs into a recording pause is cut off at the last poll before it.
 </p>
 {% if stats.concerns %}
 <table>
   <thead><tr><th>Silence ended (UTC)</th><th class="num">Length (s)</th><th class="num">CT before (W)</th><th class="num">CT after (W)</th></tr></thead>
   <tbody>
   {% for e in stats.concerns %}
-    <tr><td>{{ e.end.strftime('%Y-%m-%d %H:%M:%S') }}</td><td class="num">{{ '%.0f' % e.gap }}</td>
+    <tr><td>{{ e.end.strftime('%Y-%m-%d %H:%M:%S') }}{% if e.cut_short %} <span class="muted">(recording paused here; still silent at this point)</span>{% endif %}</td><td class="num">{{ '%.0f' % e.gap }}</td>
         <td class="num">{{ '%.0f' % e.ct_before }}</td><td class="num">{{ '%.0f' % e.ct_after }}</td></tr>
   {% endfor %}
   </tbody>

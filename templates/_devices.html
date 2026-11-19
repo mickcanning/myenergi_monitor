@@ -5,17 +5,31 @@
 {% endif %}
 <div class="cards">
 {% for d in devices %}
-  <section class="card kind-{{ d.kind }}">
+  <section class="card kind-{{ d.kind }}{{ ' is-hub' if d.is_hub }}">
+    {% if d.is_hub %}
+    <span class="hub-badge" role="img" aria-label="Hub" title="Hub: the master device that reports this system to the myenergi cloud">
+      <svg viewBox="0 0 64 40" aria-hidden="true">
+        <path d="M18 36h30a12 12 0 0 0 1.5-23.9A16 16 0 0 0 19 10.5 12.8 12.8 0 0 0 18 36z"/>
+        <text x="33" y="27.5" text-anchor="middle">Hub</text>
+      </svg>
+    </span>
+    {% endif %}
     <div class="card-head">
       <img class="device-img" src="{{ d.image }}" alt="" width="56" height="56">
-      <h2>
-        {{ d.name or d.label }}
-        <span class="muted">{{ d.label if d.name else '' }} {{ d.sno }}</span>
-      </h2>
+      <div>
+        <h2>
+          {{ d.name or d.label }}
+          {% if d.name %}<span class="muted">{{ d.label }}</span>{% endif %}
+        </h2>
+        <p class="device-meta">
+          Serial {{ d.sno }}
+          {% if d.firmware.version %}&middot; <span title="fwv {{ d.firmware.raw }}">Firmware {{ d.firmware.version }}</span>{% endif %}
+        </p>
+      </div>
     </div>
     <p class="age {{ d.freshness }}">
       {% if d.age_s is none %}No report time
-      {% else %}Last report {{ '%.0f' % d.age_s }} s ago ({{ d.report_utc }} UTC){% endif %}
+      {% else %}Last report {{ d.age_s | duration }} ago ({{ d.report_utc }} UTC){% endif %}
       <span class="badge {{ d.freshness }}">{{ d.freshness }}</span>
     </p>
     {% if d.cts %}

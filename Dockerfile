@@ -11,6 +11,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
+# The app runs as PUID (not root): make sure it can read the code whatever the source files' permissions were
+# (e.g. a Mac checkout with 600 files), while leaving it read-only to the app.
+RUN chmod -R a+rX,go-w /app
 
 # Uploaded logs, the current report and CT choices live here: map it to appdata to keep them.
 VOLUME /app/instance

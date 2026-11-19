@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 DEVICE_ORDER = ["eddi", "zappi", "libbi", "harvi"]
 LABELS = {"eddi": "Eddi", "zappi": "Zappi", "libbi": "Libbi", "harvi": "Harvi"}
 _CT_KEY = re.compile(r"^ect[pt]\d$")
-_SHOWN = {"sno", "dat", "tim", "frq", "vol"}
+_SHOWN = {"sno", "dat", "tim", "frq", "vol", "isVHubEnabled", "fwv"}
 
 
 def parse_ts(rec):
@@ -25,6 +25,36 @@ def _scaled(value, divisor_if_over, divisor):
     except (TypeError, ValueError):
         return None
     return v / divisor if v > divisor_if_over else v
+
+
+def is_hub(rec):
+    """An Eddi or Zappi with isVHubEnabled set is the hub: the master that reports the system to the cloud."""
+    return str(rec.get("isVHubEnabled", "")).strip().lower() in ("true", "1")
+
+
+def firmware(rec):
+    """fwv looks like '3202S5.754': the part after 'S' is the version myenergi's app shows (5.754).
+    Harvis report '...S0.000' (no version over the API), which is treated as not reported."""
+    raw = str(rec.get("fwv") or "").strip()
+    version = raw.rsplit("S", 1)[-1] if "S" in raw else raw
+    if not version or version.strip("0.") == "":
+        return {"raw": raw or None, "version": None}
+    return {"raw": raw, "version": version}
+
+
+def format_duration(seconds):
+    """42 -> '42s', 312 -> '5m 12s', 54025 -> '15h 0m 25s', 190000 -> '2d 4h 46m 40s'."""
+    if seconds is None:
+        return ""
+    s = max(0, int(round(seconds)))
+    parts, started = [], False
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        n, s = divmod(s, size)
+        if n or started:                 # from the first non-zero unit down, keep every unit (e.g. 1h 0m 5s)
+            parts.append(f"{n}{unit}")
+            started = True
+    parts.append(f"{s}s")
+    return " ".join(parts)
 
 
 def freshness(age):
@@ -62,6 +92,8 @@ def summarise(status, names=None, now=None):
             devices.append({
                 "kind": kind,
                 "label": LABELS.get(kind, kind.title()),
+                "is_hub": is_hub(rec),
+                "firmware": firmware(rec),
                 "sno": sno,
                 "name": names.get(sno),
                 "report_utc": ts.strftime("%Y-%m-%d %H:%M:%S") if ts else None,

@@ -1,0 +1,6 @@
+{% if recording.on %}
+  Recording every {{ recording.interval }} s, kept for {{ recording.retention }} days{% if recording.last_ok %}; last poll {{ recording.last_ok }} UTC{% endif %}.
+  {% if recording.last_error %}<span class="warn-text">Last poll failed at {{ recording.last_error[0] }} UTC: {{ recording.last_error[1] }}</span>{% endif %}
+{% else %}
+  Recording is off (set RECORD=1 and the API credentials to turn it on).
+{% endif %}

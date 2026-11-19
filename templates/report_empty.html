@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Graphs · myenergi monitor{% endblock %}
+{% block content %}
+<h1>Graphs</h1>
+<p class="muted">{% include "_recording.html" %}</p>
+{% if rng %}
+<p>No Harvi readings in the chosen range yet. <a href="{{ url_for('stored_report') }}">Show the last 24 hours</a></p>
+{% elif recording.on %}
+<p>No data recorded yet. The first readings arrive within {{ recording.interval }} s; the report needs a few minutes of data to be useful.</p>
+{% endif %}
+<p>Or <a href="{{ url_for('upload') }}">upload a log from monitor.py</a>{% if has_current_report %}, or open the <a href="{{ upload_report_link }}">last uploaded report</a>{% endif %}.</p>
+{% endblock %}

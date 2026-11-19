@@ -20,6 +20,7 @@ if os.getuid() == 0:
     os.setgroups([])
     os.setgid(gid)
     os.setuid(uid)
+os.environ["HOME"] = "/tmp"          # root's home isn't writable after dropping privileges (gunicorn writes there)
 
 os.execvp("gunicorn", [
     "gunicorn", "--bind", f"0.0.0.0:{port}", "--workers", "1", "--threads", "4", "--timeout", "60",

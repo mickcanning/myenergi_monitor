@@ -33,14 +33,16 @@ class FakeClient:
     def status(self):
         return {
             "eddi": [{"sno": 999, "dat": "18-11-2026", "tim": "23:00:00", "ectp1": 5, "ectt1": "Internal Load",
-                      "ectp2": 0, "ectt2": "None", "ectp3": 0, "ectt3": "None", "frq": 50.01, "vol": 2345, "sta": 3}],
-            "harvi": [{"sno": 111, "dat": "18-11-2026", "tim": "22:58:00", "ectp1": 4000, "ectt1": "Grid"}],
+                      "ectp2": 0, "ectt2": "None", "ectp3": 0, "ectt3": "None", "frq": 50.01, "vol": 2345, "sta": 3,
+                      "isVHubEnabled": True, "fwv": "3202S5.754"}],
+            "harvi": [{"sno": 111, "dat": "18-11-2026", "tim": "22:58:00", "ectp1": 4000, "ectt1": "Grid",
+                       "fwv": "3170S0.000"}],
             "asn": "s18.myenergi.net",
         }
 
 
 def make_app(tmp_path):
-    a = app_module.create_app({"TESTING": True, "UPLOAD_DIR": str(tmp_path), "HUB_SERIAL": "1", "API_KEY": "k",
+    a = app_module.create_app({"TESTING": True, "UPLOAD_DIR": str(tmp_path), "DB_PATH": str(tmp_path / "readings.db"), "HUB_SERIAL": "1", "API_KEY": "k",
                                "HARVI_NAMES": {"111": "Grid", "222": "Solar & Battery"}, "APP_PASSWORD": ""})
     a.extensions["client"] = FakeClient()
     return a
@@ -53,6 +55,10 @@ def test_dashboard_and_api(tmp_path):
     assert "50.01 Hz" in html and "234.5 V" in html          # auto-scaled units
     data = c.get("/api/status").get_json()
     assert [d["kind"] for d in data["devices"]] == ["eddi", "harvi"]
+    assert [d["is_hub"] for d in data["devices"]] == [True, False]
+    assert html.count('class="hub-badge"') == 1 and "isVHubEnabled" not in html     # badge, not a raw field
+    assert "Serial 999" in html and "Firmware 5.754" in html and 'title="fwv 3202S5.754"' in html
+    assert html.count("Firmware ") == 1 and "Serial 111" in html                 # Harvi sends 0.000: no firmware shown
     assert c.get("/partials/devices").status_code == 200
     images = [d["image"] for d in data["devices"]]
     assert images[0].startswith("/static/img/devices/eddi.") and "harvi." in images[1]
@@ -78,25 +84,26 @@ def test_upload_and_report(tmp_path):
 def test_current_report_persists(tmp_path):
     a = make_app(tmp_path)
     c = a.test_client()
-    # no report yet: the nav tab goes to the upload page
-    assert 'href="/upload"' in c.get("/").get_data(as_text=True)
+    # the nav tab goes to the recorded-data report; no uploaded report to go back to yet
+    assert 'href="/report"' in c.get("/upload").get_data(as_text=True)
+    assert "last uploaded report" not in c.get("/upload").get_data(as_text=True)
     loc = c.post("/upload", data={"log": (io.BytesIO(make_csv().encode()), "log.csv")},
                  content_type="multipart/form-data").headers["Location"]
-    # visiting the live tab and coming back: the tab now points at the report
-    assert f'href="{loc}"' in c.get("/").get_data(as_text=True)
+    # the upload page links back to the uploaded report
+    assert f'href="{loc}"' in c.get("/upload").get_data(as_text=True)
     # chosen settings are remembered too
     c.get(loc + "?grid=222&thresh=45")
-    assert f'href="{loc}?grid=222&amp;thresh=45"' in c.get("/").get_data(as_text=True)
+    assert f'href="{loc}?grid=222&amp;thresh=45"' in c.get("/upload").get_data(as_text=True)
     # ...and survive an app restart
     c2 = make_app(tmp_path).test_client()
-    assert f'href="{loc}?grid=222&amp;thresh=45"' in c2.get("/").get_data(as_text=True)
+    assert f'href="{loc}?grid=222&amp;thresh=45"' in c2.get("/upload").get_data(as_text=True)
     # a new upload replaces the current report
     loc2 = c2.post("/upload", data={"log": (io.BytesIO(make_csv().encode()), "again.csv")},
                    content_type="multipart/form-data").headers["Location"]
-    assert loc2 != loc and f'href="{loc2}"' in c2.get("/").get_data(as_text=True)
+    assert loc2 != loc and f'href="{loc2}"' in c2.get("/upload").get_data(as_text=True)
     # a failed upload leaves the current report in place
     c2.post("/upload", data={"log": (io.BytesIO(b"nope"), "bad.csv")}, content_type="multipart/form-data")
-    assert f'href="{loc2}"' in c2.get("/").get_data(as_text=True)
+    assert f'href="{loc2}"' in c2.get("/upload").get_data(as_text=True)
 
 
 def test_ct_choice(tmp_path):
@@ -225,7 +232,7 @@ def test_client_ignores_undefined_server_name():
 def test_behind_proxy(tmp_path):
     def scheme_seen(proxy):
         a = make_app(tmp_path) if not proxy else app_module.create_app(
-            {"TESTING": True, "UPLOAD_DIR": str(tmp_path), "HUB_SERIAL": "1", "API_KEY": "k", "BEHIND_PROXY": True, "APP_PASSWORD": ""})
+            {"TESTING": True, "UPLOAD_DIR": str(tmp_path), "DB_PATH": str(tmp_path / "readings.db"), "HUB_SERIAL": "1", "API_KEY": "k", "BEHIND_PROXY": True, "APP_PASSWORD": ""})
         a.add_url_rule("/_scheme", "_scheme", lambda: __import__("flask").request.url_root)
         return a.test_client().get("/_scheme", headers={"X-Forwarded-Proto": "https",
                                                          "X-Forwarded-Host": "energy.example.com"}).get_data(as_text=True)
@@ -234,7 +241,7 @@ def test_behind_proxy(tmp_path):
 
 
 def make_locked_app(tmp_path, password="s3cret pass", **extra):
-    a = app_module.create_app({"TESTING": True, "UPLOAD_DIR": str(tmp_path / "up"), "HUB_SERIAL": "1", "API_KEY": "k",
+    a = app_module.create_app({"TESTING": True, "UPLOAD_DIR": str(tmp_path / "up"), "DB_PATH": str(tmp_path / "readings.db"), "HUB_SERIAL": "1", "API_KEY": "k",
                                "APP_PASSWORD": password, "SECRET_KEY_FILE": str(tmp_path / "secret_key"),
                                "AUTH_FAIL_DELAY": 0, **extra})
     a.extensions["client"] = FakeClient()
@@ -295,15 +302,211 @@ def test_login_secure_cookie_and_throttle(tmp_path):
     assert r.status_code == 429 and "Too many" in r.get_data(as_text=True)
 
 
+def recorded_status(ts):
+    """API status at unix time ts: the Eddi reports every poll, the grid Harvi every 30 s with one
+    5-minute silence (while 4 kW flows), the solar Harvi every 60 s."""
+    from datetime import datetime as dt, timezone as tz
+    def stamp(x):
+        d = dt.fromtimestamp(x, tz.utc)
+        return {"dat": d.strftime("%d-%m-%Y"), "tim": d.strftime("%H:%M:%S")}
+    t0 = 1795000000                                   # fixed start so the silence lands in a known place
+    grid_ts = ts - (ts % 30)
+    if t0 + 3600 <= grid_ts < t0 + 3900:
+        grid_ts = t0 + 3600 - 30
+    return {"eddi": [{"sno": 999, **stamp(ts), "ectp1": 50, "ectt1": "Internal Load"}],
+            "harvi": [{"sno": 111, **stamp(grid_ts), "ectp1": 4000, "ectt1": "Grid"},
+                      {"sno": 222, **stamp(ts - (ts % 60)), "ectp1": -1500, "ectt1": "Generation"}]}
+
+
+def fill_store(store, start, hours, step=15):
+    import recorder
+    # Test data only: skip the per-commit fsync, which makes thousands of tiny commits take minutes in Docker.
+    store._conn().execute("PRAGMA synchronous = OFF")
+    clock = {"t": start}
+    rec = recorder.Recorder(store, lambda: recorded_status(clock["t"]), interval=step)
+    for i in range(int(hours * 3600 / step)):
+        clock["t"] = start + i * step
+        rec.poll_once(now=clock["t"])
+    return rec
+
+
+def test_recorder_and_store(tmp_path):
+    import recorder
+    store = recorder.Store(tmp_path / "r.db")
+    assert store.span() is None
+    t0 = 1795000000
+    rec = fill_store(store, t0, 2)
+    lo, hi = store.span()
+    assert lo == t0 and hi == t0 + 2 * 3600 - 15 and rec.last_ok == hi
+    lg = store.load_log(t0, t0 + 3600)
+    assert lg.serials("harvi") == ["111", "222"] and len(lg.rows[("harvi", "111")]) == 241
+    r = lg.rows[("harvi", "111")][10]
+    assert r.ct == 4000 and r.age == (r.t - r.report).total_seconds()
+    assert ("zappi", "1") not in lg.rows and ("eddi", "999") in lg.rows
+    # live chart points: one per distinct report
+    pts = store.recent_points("harvi", "222", t0)
+    assert len(pts) == 121 and pts[0][1] == {1: -1500.0}           # 2 h of 60 s reports, plus one just before t0
+    # a failed poll is remembered and recording carries on
+    def boom():
+        raise RuntimeError("API down")
+    rec.get_status = boom
+    rec.poll_once(now=hi + 15)
+    assert rec.last_error[1] == "API down" and store.span()[1] == hi
+    # old rows are pruned past the retention period
+    assert store.prune(t0 + 3600) > 0 and store.span()[0] == t0 + 3600
+
+
+def make_recorded_app(tmp_path, hours=26, step=30):
+    a = app_module.create_app({"TESTING": True, "UPLOAD_DIR": str(tmp_path / "up"), "DB_PATH": str(tmp_path / "r.db"),
+                               "HUB_SERIAL": "1", "API_KEY": "k", "APP_PASSWORD": "",
+                               "HARVI_NAMES": {"111": "Grid", "222": "Solar"}})
+    a.extensions["client"] = FakeClient()
+    fill_store(a.extensions["store"], 1795000000 - 3600 * (hours - 2), hours, step=step)
+    return a
+
+
+def test_stored_report(tmp_path):
+    from datetime import datetime as dt, timezone as tz
+    c = make_recorded_app(tmp_path).test_client()
+    lo, hi = c.application.extensions["store"].span()
+    fmt = lambda x: dt.fromtimestamp(x, tz.utc).strftime("%Y-%m-%dT%H:%M")
+    # the nav goes to the recorded-data report; default range is the last 24 h of data
+    page = c.get("/").get_data(as_text=True)
+    assert 'href="/report"' in page
+    html = c.get("/report").get_data(as_text=True)
+    assert 'type="datetime-local"' in html and f'value="{fmt(hi + 60)}"' in html
+    assert f'min="{fmt(lo)}"' in html and "Last 7 days" in html
+    assert "Gaps of concern" in html and "None found" not in html           # the ~5-minute silence is found
+    # a narrower range, the chart for it, and the same in dark
+    q = f"from={fmt(hi - 3 * 3600)}&to={fmt(hi - 3600)}&grid=111"
+    html = c.get("/report?" + q).get_data(as_text=True)
+    assert "None found with these settings" in html                          # silence is outside this window
+    png = c.get("/report.png?" + q)
+    assert png.status_code == 200 and png.data[:4] == b"\x89PNG"
+    assert "attachment" not in png.headers.get("Content-Disposition", "inline")
+    assert c.get("/report.png?" + q + "&theme=dark").data != png.data
+    # out-of-range and back-to-front inputs are clamped with a note
+    html = c.get(f"/report?from={fmt(hi)}&to={fmt(lo)}").get_data(as_text=True)
+    assert "The start was after the end" in html
+    html = c.get("/report?from=2000-01-01T00:00&to=2100-01-01T00:00").get_data(as_text=True)
+    assert f'value="{fmt(lo)}"' in html or "at most 31 days" in html
+    assert c.get("/report?from=garbage").status_code == 200
+
+
+def test_stored_report_long_range_and_empty(tmp_path):
+    c = make_recorded_app(tmp_path, hours=33 * 24, step=300).test_client()   # just needs > 31 days of data
+    html = c.get("/report?from=2000-01-01T00:00&to=2100-01-01T00:00").get_data(as_text=True)
+    assert "at most 31 days" in html
+    # nothing recorded yet
+    a = app_module.create_app({"TESTING": True, "UPLOAD_DIR": str(tmp_path / "up2"), "DB_PATH": str(tmp_path / "e.db"),
+                               "HUB_SERIAL": "1", "API_KEY": "k", "APP_PASSWORD": ""})
+    html = a.test_client().get("/report").get_data(as_text=True)
+    assert "upload a log" in html and a.test_client().get("/report.png").status_code == 404
+
+
+def test_live_chart_from_recorded_data(tmp_path):
+    import time as _t
+    import recorder
+    a = make_app(tmp_path)
+    store = a.extensions["store"]
+    now = int(_t.time())
+    def status_at(ts):
+        from datetime import datetime as dt, timezone as tz
+        d = dt.fromtimestamp(ts, tz.utc)
+        return {"eddi": [{"sno": 999, "dat": d.strftime("%d-%m-%Y"), "tim": d.strftime("%H:%M:%S"),
+                          "ectp1": 100, "ectt1": "Internal Load"}]}
+    clock = {"t": now - 600}
+    rec = recorder.Recorder(store, lambda: status_at(clock["t"]))
+    for i in range(10):
+        clock["t"] = now - 600 + i * 60
+        rec.poll_once(now=clock["t"])
+    a.extensions["recorder"] = rec                       # as if the background recorder were running
+    eddi = a.test_client().get("/api/status").get_json()["devices"][0]
+    assert not eddi["ct_chart"]["waiting"] and eddi["ct_chart"]["minutes"] == 9
+    # a fresh recorder poll is reused by the dashboard instead of a second API call
+    rec.latest = (_t.time(), {"zappi": [{"sno": 42, "ectp1": 7000, "ectt1": "Internal Load"}]})
+    assert [d["kind"] for d in a.test_client().get("/api/status").get_json()["devices"]] == ["zappi"]
+    rec.latest = (_t.time() - 3600, rec.latest[1])                  # stale: ask the API again
+    assert a.test_client().get("/api/status").get_json()["devices"][0]["kind"] == "eddi"
+
+
+def test_format_duration():
+    from devices import format_duration
+    assert [format_duration(x) for x in (0, 42, 59.6, 60, 312, 3600, 3605, 54025, 190000)] == \
+        ["0s", "42s", "1m 0s", "1m 0s", "5m 12s", "1h 0m 0s", "1h 0m 5s", "15h 0m 25s", "2d 4h 46m 40s"]
+    assert format_duration(None) == ""
+
+
+def test_silences_respect_recording_gaps():
+    from datetime import datetime as dt, timedelta as td, timezone as tz
+    from charts import Row, silences, concerns, recording_gaps
+    t0 = dt(2026, 11, 18, 10, 0, tzinfo=tz.utc)
+
+    def polls(spec):
+        """spec: list of (poll_offset_s, report_offset_s) -> rows polled every 15 s with 4 kW in the CT."""
+        return [Row(t0 + td(seconds=p), t0 + td(seconds=r), p - r, 4000.0) for p, r in spec]
+
+    # 1. continuous polling, Harvi silent 10:00:00 -> 10:05:00: one 300 s silence, as before
+    rows = polls([(i, 0 if i < 300 else 300) for i in range(0, 600, 15)])
+    s = silences(rows)
+    assert [(x["gap"], x["cut_short"]) for x in s] == [(300.0, False)] and len(concerns(rows, 120, 500)) == 1
+    # 2. app stopped 10:01 -> 11:00 and the Harvi's report is fresh when polling resumes: not a silence
+    rows = polls([(i, i - i % 30) for i in range(0, 60, 15)] + [(i, i - i % 30) for i in range(3600, 3700, 15)])
+    assert recording_gaps(rows) and concerns(rows, 120, 500) == []
+    assert max(x["gap"] for x in silences(rows)) <= 45
+    # 3. same outage, but after restart the cloud still shows the 10:00:30 report until 11:02: the cloud's
+    #    timestamp proves it was silent the whole time, so that counts (ends at the new report)
+    rows = polls([(i, 0 if i < 30 else 30) for i in range(0, 60, 15)] +
+                 [(i, 30 if i < 3720 else 3720) for i in range(3600, 3800, 15)])
+    s = silences(rows)
+    assert s[-1]["gap"] == 3690 and not s[-1]["cut_short"]
+    # 4. silent from 10:00 while polling until 10:10, then the app stops; afterwards the report is fresh:
+    #    only the observed 10 minutes count, cut short at the last poll that still showed the old report
+    rows = polls([(i, 0) for i in range(0, 615, 15)] + [(i, i) for i in range(5000, 5100, 15)])
+    s = silences(rows)
+    assert (s[0]["gap"], s[0]["cut_short"], s[0]["end"]) == (600.0, True, t0 + td(seconds=600))
+
+
+def test_stored_report_with_recording_gap(tmp_path):
+    """The app was down for 2 h in the middle of the data: no false gap of concern, gap shown on the page."""
+    import recorder
+    a = app_module.create_app({"TESTING": True, "UPLOAD_DIR": str(tmp_path / "up"), "DB_PATH": str(tmp_path / "r.db"),
+                               "HUB_SERIAL": "1", "API_KEY": "k", "APP_PASSWORD": ""})
+    store = a.extensions["store"]
+    store._conn().execute("PRAGMA synchronous = OFF")
+    t0 = 1795000000 - 6 * 3600
+    def fresh_status(ts):                       # every device reports every 30 s, 4 kW in the grid CT
+        from datetime import datetime as dt, timezone as tz
+        d = dt.fromtimestamp(ts - ts % 30, tz.utc)
+        stamp = {"dat": d.strftime("%d-%m-%Y"), "tim": d.strftime("%H:%M:%S")}
+        return {"eddi": [{"sno": 999, **stamp, "ectp1": 0}], "harvi": [{"sno": 111, **stamp, "ectp1": 4000}]}
+    clock = {"t": t0}
+    rec = recorder.Recorder(store, lambda: fresh_status(clock["t"]))
+    for ts in list(range(t0, t0 + 2 * 3600, 15)) + list(range(t0 + 4 * 3600, t0 + 6 * 3600, 15)):
+        clock["t"] = ts
+        rec.poll_once(now=ts)
+    html = a.test_client().get("/report").get_data(as_text=True)
+    assert "None found with these settings" in html                      # the 2 h outage is not a gap of concern
+    assert "Not recording for 2h 0m 15s" in html and "1 pause," in html
+    png = a.test_client().get("/report.png")
+    assert png.status_code == 200 and png.data[:4] == b"\x89PNG"
+
+
 if __name__ == "__main__":
     import tempfile
     for fn in (test_dashboard_and_api, test_upload_and_report, test_current_report_persists,
                test_ct_choice, test_ct_chart_builds_up, test_upload_rejects_bad_files, test_behind_proxy,
-               test_login, test_login_secure_cookie_and_throttle):
+               test_login, test_login_secure_cookie_and_throttle, test_recorder_and_store,
+               test_stored_report, test_stored_report_long_range_and_empty, test_live_chart_from_recorded_data,
+               test_stored_report_with_recording_gap):
         with tempfile.TemporaryDirectory() as d:
             fn(Path(d))
             print("ok", fn.__name__)
     test_load_log_errors()
     print("ok test_load_log_errors")
+    test_format_duration()
+    print("ok test_format_duration")
+    test_silences_respect_recording_gaps()
+    print("ok test_silences_respect_recording_gaps")
     test_client_ignores_undefined_server_name()
     print("ok test_client_ignores_undefined_server_name")

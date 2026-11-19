@@ -13,6 +13,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.dates as mdates  # noqa: E402
+from matplotlib.ticker import AutoMinorLocator, FuncFormatter, MaxNLocator  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 
 REQUIRED = ["poll_utc", "device", "sno", "report_utc", "age_s", "ectp1"]
@@ -91,19 +92,61 @@ def load_log(fileobj):
     return log
 
 
+POLL_GAP_MIN_S = 120   # a pause between polls longer than this (or 4 poll intervals) means recording stopped
+
+
+def recording_gap_threshold(rows):
+    steps = [(b.t - a.t).total_seconds() for a, b in zip(rows, rows[1:])]
+    return max(POLL_GAP_MIN_S, 4 * statistics.median(steps)) if steps else POLL_GAP_MIN_S
+
+
+def recording_gaps(rows):
+    """(start, end) of each pause in polling, e.g. while the app or container wasn't running."""
+    th = recording_gap_threshold(rows)
+    return [(a.t, b.t) for a, b in zip(rows, rows[1:]) if (b.t - a.t).total_seconds() > th]
+
+
 def silences(rows):
-    """Gaps between distinct report timestamps, with the CT reading on each side."""
-    out, last = [], None
+    """Silences between distinct report times, counted only as far as polling actually observed them.
+
+    The cloud's report time proves the device was silent from its last report until the last poll that still
+    showed it. With continuous polling the next report turns up within one poll interval, so the silence runs to
+    that new report. If polling paused before the new report was seen (app not running), what happened in the
+    pause is unknown: the silence is cut short at the last poll that still showed the old report ("cut_short").
+    """
+    th = recording_gap_threshold(rows)
+    out, last, prev = [], None, None          # last: first row of the current report; prev: previous polled row
     for r in rows:
         if r.report is None:
+            prev = r
             continue
         if last is not None and r.report != last.report:
-            out.append({"start": last.report, "end": r.report,
-                        "gap": (r.report - last.report).total_seconds(),
-                        "ct_before": last.ct, "ct_after": r.ct})
+            if prev is not None and (r.t - prev.t).total_seconds() > th:
+                seen = prev if prev.report == last.report else last
+                end, ct_after, cut = seen.t, seen.ct, True
+            else:
+                end, ct_after, cut = r.report, r.ct, False
+            gap = (end - last.report).total_seconds()
+            if gap > 0:
+                out.append({"start": last.report, "end": end, "gap": gap,
+                            "ct_before": last.ct, "ct_after": ct_after, "cut_short": cut})
         if last is None or r.report != last.report:
             last = r
+        prev = r
     return out
+
+
+def _broken(rows, value, th):
+    """x/y lists with a NaN between rows separated by a recording gap, so lines aren't drawn across it."""
+    xs, ys, prev = [], [], None
+    for r in rows:
+        if prev is not None and (r.t - prev.t).total_seconds() > th:
+            xs.append(prev.t + timedelta(seconds=1))      # just after the last poll, so step lines stop there
+            ys.append(math.nan)
+        xs.append(r.t)
+        ys.append(value(r))
+        prev = r
+    return xs, ys
 
 
 def concerns(rows, gap_s, ct_w):
@@ -125,6 +168,10 @@ def _pct(values, q):
 def analyse(log, grid_sno, thresh_s=30, gap_s=120, ct_w=500, night_start=23, night_end=8):
     """Numbers for the report's tables."""
     result = {"harvis": [], "concerns": [], "eddi_max_age": None, "polls": 0, "start": log.start, "end": log.end}
+    grid_rows = log.rows[("harvi", grid_sno)] if ("harvi", grid_sno) in log.rows else []
+    gaps = recording_gaps(grid_rows)
+    result["recording_gaps"] = gaps
+    result["recording_gap_s"] = sum((b - a).total_seconds() for a, b in gaps)
     eddi_ages = [r.age for (dev, _), rows in log.rows.items() if dev == "eddi" for r in rows]
     if eddi_ages:
         result["eddi_max_age"] = max(eddi_ages)
@@ -153,8 +200,14 @@ def _style(ax, pal):
     for s in ("top", "right", "left"):
         ax.spines[s].set_visible(False)
     ax.spines["bottom"].set_color(pal["spine"])
-    ax.grid(axis="y", color=pal["grid"], linewidth=0.8)
-    ax.tick_params(length=0)
+    # Y graduation: about 4.5 labelled values per inch of panel height (so the short CT panels
+    # don't get crowded), plus an unlabelled minor gridline halfway between each.
+    height_in = ax.get_position().height * ax.figure.get_figheight()
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=max(4, round(height_in * 4.5)), steps=[1, 2, 2.5, 5, 10]))
+    ax.yaxis.set_minor_locator(AutoMinorLocator(2))
+    ax.grid(axis="y", which="major", color=pal["grid"], linewidth=0.8)
+    ax.grid(axis="y", which="minor", color=pal["grid"], linewidth=0.5, alpha=0.5)
+    ax.tick_params(length=0, which="both")
 
 
 def _shade_nights(ax, start, end, night_start, night_end, shade=SHADE):
@@ -166,6 +219,44 @@ def _shade_nights(ax, start, end, night_start, night_end, shade=SHADE):
             a, b = day + timedelta(hours=night_start), day + timedelta(hours=night_end)
         ax.axvspan(a, b, color=shade, zorder=0, linewidth=0)
         day += timedelta(days=1)
+
+
+def _shade_gaps(ax, gaps, pal):
+    """Hatch the periods when nothing was being polled, so they aren't mistaken for data."""
+    for a, b in gaps:
+        ax.axvspan(a, b, facecolor=pal["surf"], edgecolor=pal["spine"], hatch="////", linewidth=0, zorder=0.5)
+
+
+# Major tick spacing in minutes, with how many minor divisions each one gets.
+_TIME_STEPS = [(5, 5), (10, 2), (15, 3), (20, 2), (30, 2), (60, 4), (120, 2), (180, 3), (240, 4), (360, 6),
+               (720, 4), (1440, 4), (2880, 2), (4320, 3), (10080, 7)]
+
+
+def _time_axis(axes, start, end, pal, max_labels=22):
+    """Dense, regular time ticks: the smallest 'nice' step that fits max_labels across the range, unlabelled
+    minor ticks in between, faint vertical gridlines. Labels are one line: the date at midnight, else the time."""
+    span_min = max(1.0, (end - start).total_seconds() / 60)
+    if span_min > 36 * 60:
+        max_labels = min(max_labels, 16)              # "12 Nov" labels are a little wider than "14:00"
+    step, minor_n = next(((s, n) for s, n in _TIME_STEPS if span_min / s <= max_labels), _TIME_STEPS[-1])
+    if step < 60:
+        major = mdates.MinuteLocator(byminute=range(0, 60, step))
+    elif step < 1440:
+        major = mdates.HourLocator(byhour=range(0, 24, step // 60))
+    else:
+        major = mdates.DayLocator(interval=step // 1440)
+
+    def label(x, _pos):
+        d = mdates.num2date(x)
+        return d.strftime("%d %b") if step >= 1440 or (d.hour, d.minute) == (0, 0) else d.strftime("%H:%M")
+
+    for a in axes:
+        a.xaxis.set_major_locator(major)
+        a.xaxis.set_major_formatter(FuncFormatter(label))
+        a.xaxis.set_minor_locator(AutoMinorLocator(minor_n))
+        a.grid(axis="x", which="major", color=pal["grid"], linewidth=0.6, alpha=0.8)
+        a.tick_params(axis="x", which="minor", length=3, color=pal["spine"])
+        a.tick_params(axis="x", which="major", length=5, color=pal["spine"], labelsize=8.5)
 
 
 def _zoom_window(conc):
@@ -194,6 +285,8 @@ def render_png(log, grid_sno, names=None, thresh_s=30, gap_s=120, ct_w=500, nigh
     grows = log.rows[("harvi", grid_sno)]
     conc = concerns(grows, gap_s, ct_w)
     start, end = log.start, log.end
+    gaps = recording_gaps(grows)
+    gap_th = {sno: recording_gap_threshold(log.rows[("harvi", sno)]) for sno in harvis}
 
     ratios = [1, 0.55]
     if conc:
@@ -216,7 +309,8 @@ def render_png(log, grid_sno, names=None, thresh_s=30, gap_s=120, ct_w=500, nigh
     def power(ax, rows, colr, ylabel, title):
         _style(ax, pal)
         ax.axhline(0, color=pal["zero"], linewidth=0.8, zorder=2)
-        ax.step([r.t for r in rows], [r.ct / 1000 for r in rows], where="post", color=colr, linewidth=1.2, zorder=3)
+        ax.step(*_broken(rows, lambda r: r.ct / 1000, recording_gap_threshold(rows)), where="post", color=colr,
+                linewidth=1.2, zorder=3)
         ax.set_ylabel(ylabel, fontsize=9)
         ax.set_title(title, loc="left", fontsize=11, fontweight="bold", color=INK, pad=8)
 
@@ -225,8 +319,9 @@ def render_png(log, grid_sno, names=None, thresh_s=30, gap_s=120, ct_w=500, nigh
     full_axes.append(ax)
     _style(ax, pal)
     _shade_nights(ax, start, end, night_start, night_end, pal['shade'])
+    _shade_gaps(ax, gaps, pal)
     red_spans(ax)
-    ax.plot([r.t for r in grows], [r.age for r in grows], color=colour[grid_sno], linewidth=1.2, zorder=3)
+    ax.plot(*_broken(grows, lambda r: r.age, gap_th[grid_sno]), color=colour[grid_sno], linewidth=1.2, zorder=3)
     for e in conc:
         pk = max(r.age for r in grows if e["start"] <= r.t <= e["end"])
         ax.plot(e["end"] - timedelta(seconds=15), pk, marker="o", markersize=9, markerfacecolor="none",
@@ -238,6 +333,9 @@ def render_png(log, grid_sno, names=None, thresh_s=30, gap_s=120, ct_w=500, nigh
     ax.set_ylabel("Seconds since last report")
     ax.set_title(f"{label[grid_sno]} (grid CT): report age" + (", gaps of concern ringed in red" if conc else ""), **title_kw)
     ax.plot([], [], color=colour[grid_sno], linewidth=2, label=label[grid_sno])
+    if gaps:
+        ax.fill_between([], [], facecolor=pal["surf"], edgecolor=pal["spine"], hatch="////", linewidth=0,
+                        label="Not recording (no polls)")
     if conc:
         ax.plot([], [], marker="o", linestyle="", markersize=8, markerfacecolor="none", markeredgecolor=RED,
                 markeredgewidth=1.8, label=f"Silence of {gap_s:g}+ s with over {ct_w:g} W in the CT")
@@ -246,6 +344,7 @@ def render_png(log, grid_sno, names=None, thresh_s=30, gap_s=120, ct_w=500, nigh
     full_axes.append(pax)
     power(pax, grows, colour[grid_sno], "Grid CT (kW)", "Grid CT reading at each report (last value held between reports)")
     _shade_nights(pax, start, end, night_start, night_end, pal['shade'])
+    _shade_gaps(pax, gaps, pal)
     red_spans(pax)
 
     # --- zoom on the concerning silences
@@ -255,8 +354,9 @@ def render_png(log, grid_sno, names=None, thresh_s=30, gap_s=120, ct_w=500, nigh
         zax = fig.add_subplot(gs[row]); row += 1
         _style(zax, pal)
         _shade_nights(zax, z0, z1, night_start, night_end, pal['shade'])
+        _shade_gaps(zax, gaps, pal)
         red_spans(zax)
-        zax.plot([r.t for r in zrows], [r.age for r in zrows], color=colour[grid_sno], linewidth=1.4, zorder=3)
+        zax.plot(*_broken(zrows, lambda r: r.age, gap_th[grid_sno]), color=colour[grid_sno], linewidth=1.4, zorder=3)
         zax.axhline(thresh_s, color=INK, linewidth=1.0, linestyle=(0, (4, 3)), zorder=2)
         zax.text(z0 + (z1 - z0) * 0.01, thresh_s + 6, f"{thresh_s:g} s threshold", **lbl)
         zmax = max(e["gap"] for e in conc)
@@ -273,10 +373,10 @@ def render_png(log, grid_sno, names=None, thresh_s=30, gap_s=120, ct_w=500, nigh
         zp = fig.add_subplot(gs[row], sharex=zax); row += 1
         power(zp, zrows, colour[grid_sno], "Grid CT (kW)", "Grid CT reading in the same window")
         _shade_nights(zp, z0, z1, night_start, night_end, pal['shade'])
+        _shade_gaps(zp, gaps, pal)
         red_spans(zp)
         zp.set_xlim(z0, z1)
-        zp.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
-        zp.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=4, maxticks=8))
+        _time_axis([zax, zp], z0, z1, pal)
 
     # --- other Harvis, full run
     for sno in others:
@@ -287,7 +387,8 @@ def render_png(log, grid_sno, names=None, thresh_s=30, gap_s=120, ct_w=500, nigh
         full_axes.append(ax)
         _style(ax, pal)
         _shade_nights(ax, start, end, night_start, night_end, pal['shade'])
-        ax.plot([r.t for r in rows], [r.age / div for r in rows], color=colour[sno], linewidth=1.2, zorder=3)
+        _shade_gaps(ax, gaps, pal)
+        ax.plot(*_broken(rows, lambda r: r.age / div, gap_th[sno]), color=colour[sno], linewidth=1.2, zorder=3)
         ax.set_ylim(bottom=0)
         ax.set_ylabel(f"{unit} since last report")
         ax.set_title(f"{label[sno]}: report age (long gaps usually mean little current in its CT)", **title_kw)
@@ -297,6 +398,7 @@ def render_png(log, grid_sno, names=None, thresh_s=30, gap_s=120, ct_w=500, nigh
         full_axes.append(pax)
         power(pax, rows, colour[sno], f"{label[sno]} CT (kW)"[:28], f"{label[sno]} CT reading at each report (last value held)")
         _shade_nights(pax, start, end, night_start, night_end, pal['shade'])
+        _shade_gaps(pax, gaps, pal)
 
     # x axis on the full-run panels: only the last one shows tick labels
     for a in full_axes:
@@ -304,14 +406,11 @@ def render_png(log, grid_sno, names=None, thresh_s=30, gap_s=120, ct_w=500, nigh
     full_axes[-1].tick_params(labelbottom=True)
     full_axes[1].tick_params(labelbottom=True)
     full_axes[0].set_xlim(start, end)
-    span_h = (end - start).total_seconds() / 3600
-    loc = mdates.HourLocator(interval=1 if span_h <= 8 else 2 if span_h <= 30 else 6)
-    for a in full_axes:
-        a.xaxis.set_major_locator(loc)
-        a.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M" if span_h <= 36 else "%d %b %H:%M"))
+    _time_axis(full_axes, start, end, pal)
     full_axes[-1].set_xlabel(
         f"Time (UTC). Grey bands: {night_start:02d}:00 to {night_end:02d}:00. "
-        "Power sign as reported by the CT; the line holds the last value between reports.",
+        "Power sign as reported by the CT; the line holds the last value between reports."
+        + (" Hatched: not recording." if gaps else ""),
         fontsize=8.5, color=INK2, loc="left")
 
     buf = io.BytesIO()

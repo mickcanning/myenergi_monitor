@@ -3,8 +3,9 @@
 A small local Flask app for investigating Harvi link problems on a myenergi system.
 
 - **Live values** (`/`): the latest readings for every device on your hub (Eddi, Zappi, Libbi, Harvi), refreshed automatically, with how old each device's last report is.
-- **Log report** (`/upload`): upload a CSV written by `monitor.py` and get the report chart and tables: Harvi report age, CT power, silences over a threshold, and "gaps of concern" (long silences while current was flowing, so low harvested power doesn't explain them).
-- **`monitor.py`**: a command-line logger that polls the API and writes the CSV the report reads.
+- **Recording**: while the app runs it polls the API every 15 s in the background and stores every reading in `instance/readings.db` (kept 180 days, about 1.7 MB a day).
+- **Graphs** (`/report`): pick a start and end date within the recorded data (up to 31 days at a time) and get the report chart and tables: Harvi report age, CT power, silences over a threshold, and "gaps of concern" (long silences while current was flowing, so low harvested power doesn't explain them). You can still upload a CSV from `monitor.py` instead.
+- **`monitor.py`**: optional command-line logger for recording somewhere the app isn't running; its CSV can be uploaded to the report.
 
 The myenergi API used here is the community-documented, unofficial one, so field names and units may differ by firmware.
 
@@ -33,6 +34,18 @@ Run like this, it listens on localhost only. It shows your energy data and uses 
 Every push to `main` runs the tests, builds the image, smoke-tests it and publishes it to
 `ghcr.io/mickcanning/myenergi_monitor:latest` (see `.github/workflows/docker.yml`).
 
+**Test the image locally before pushing**
+
+Needs Docker on the Mac (e.g. `brew install --cask orbstack`, then open OrbStack once).
+
+```bash
+scripts/docker-test.sh          # build, run the tests inside the image, smoke-test a container (same checks as CI)
+scripts/docker-test.sh run      # ...then run it with your .env at http://localhost:5001 (Ctrl+C stops it)
+PLATFORM=linux/amd64 scripts/docker-test.sh   # build the exact x86 image Unraid runs (slower on Apple silicon)
+```
+
+Data from `run` is kept in the Docker volume `myenergi-test-data` (`docker volume rm myenergi-test-data` clears it).
+
 **Unraid**
 
 1. Copy `unraid/myenergi-monitor.xml` to `/boot/config/plugins/dockerMan/templates-user/` on the server
@@ -41,8 +54,9 @@ Every push to `main` runs the tests, builds the image, smoke-tests it and publis
    and (optionally) Harvi names, then **Apply**.
 3. Open `http://<unraid-ip>:5001/`.
 
-Data (uploaded logs, the current report, CT choices) is kept in `/mnt/user/appdata/myenergi-monitor`.
-The live CT chart history is in memory and starts again when the container restarts.
+Recorded readings (`readings.db`), uploaded logs, CT choices and the sign-in key are kept in
+`/mnt/user/appdata/myenergi-monitor`, so they survive restarts and updates. Recording runs whenever the
+container is up; restarts leave a gap in the data for the time it was down.
 To update: **Docker > myenergi-monitor > Force update** (or let the Auto Update plugin do it).
 
 **Any Docker host**
@@ -94,13 +108,16 @@ Nginx Proxy Manager: add a Proxy Host (scheme `http`, forward to the Unraid IP a
 SSL certificate with Force SSL, attach an Access List that only allows your LAN, and under Advanced add
 `client_max_body_size 25m;`.
 
-## Record a log
+## Record a log elsewhere (optional)
+
+The app records on its own while it runs, so this is only for logging from another machine.
+
 
 ```bash
 caffeinate -is python monitor.py --interval 15 --stale 300 --csv overnight.csv   # Ctrl+C to stop
 ```
 
-`caffeinate -is` stops a Mac sleeping while the logger runs (keep it plugged in; a closed lid still sleeps unless you're in clamshell mode with an external display). Then upload `overnight.csv` on the **Log report** page.
+`caffeinate -is` stops a Mac sleeping while the logger runs (keep it plugged in; a closed lid still sleeps unless you're in clamshell mode with an external display). Then upload `overnight.csv` on the **Graphs** page.
 
 ## Reading the report
 
@@ -120,6 +137,7 @@ caffeinate -is python monitor.py --interval 15 --stale 300 --csv overnight.csv  
 | `GRID_HARVI_SNO` | Default grid Harvi in reports (otherwise a name containing "grid", otherwise the first) |
 | `APP_PASSWORD` | If set, the app asks for this password (sessions last 30 days; changing it signs everyone out) |
 | `BEHIND_PROXY` | `1` when served through a reverse proxy such as nginx (trusts its `X-Forwarded-*` headers) |
+| `RECORD`, `POLL_SECONDS`, `RETENTION_DAYS` | Background recording on/off (default on), poll interval (default 15 s) and how many days to keep (default 180) |
 | `REFRESH_SECONDS`, `PORT` | Live-page refresh interval (default 15) and port (default 5001) |
 
 ## Tests

@@ -1,7 +1,8 @@
 {% extends "base.html" %}
-{% block title %}Log report · myenergi monitor{% endblock %}
+{% block title %}Graphs · myenergi monitor{% endblock %}
 {% block content %}
-<h1>Log report</h1>
+<h1>Graphs</h1>
+<p><a href="{{ url_for('stored_report') }}">Report on recorded data</a> &middot; this app records continuously, so uploading is only needed for logs from elsewhere.</p>
 <p>Upload a CSV written by <code>monitor.py</code> to draw the Harvi report-age charts.</p>
 {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
 <form method="post" enctype="multipart/form-data" class="panel">
@@ -11,7 +12,7 @@
   <button type="submit">Generate report</button>
 </form>
 {% if has_current_report %}
-<p><a href="{{ report_link }}">Back to the current report</a></p>
+<p><a href="{{ upload_report_link }}">Back to the last uploaded report</a></p>
 {% endif %}
 <p class="muted">Uploaded files are kept in this app's <code>instance/uploads</code> folder for 7 days.</p>
 {% endblock %}

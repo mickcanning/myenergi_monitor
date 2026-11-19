@@ -5,6 +5,7 @@
   --error-bg:#fbeaea; --error-line:#e34948; --zero:#b8b7b2; --shadow:rgb(0 0 0 / .08);
   --good:#0c8a5b; --warn-line:#b37a00; --warn:#8a5e00; --bad-line:#c0392b; --bad:#a02b20;
   --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a;   /* CT 1-3 chart lines: colour follows the slot */
+  --hub-fill:#e8f1fc;
 }
 :root[data-theme="dark"] {
   color-scheme:dark;
@@ -12,6 +13,7 @@
   --error-bg:#3a1e1e; --error-line:#e66767; --zero:#6b6a65; --shadow:rgb(0 0 0 / .5);
   --good:#2fbf71; --warn-line:#c98500; --warn:#e0a526; --bad-line:#e66767; --bad:#f08a8a;
   --s1:#3987e5; --s2:#d95926; --s3:#199e70;
+  --hub-fill:#16263b;
 }
 * { box-sizing: border-box; }
 body { margin:0; font:15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color:var(--ink); background:var(--surface); }
@@ -80,3 +82,17 @@ button.secondary { background:var(--card); color:var(--ink); border:1px solid va
 .login { max-width:22rem; margin:3rem auto; display:flex; flex-direction:column; gap:.9rem; }
 .login h1 { margin:0; }
 .login input { width:100%; }
+.range { display:flex; flex-wrap:wrap; gap:.8rem 1.2rem; align-items:end; width:100%; padding-bottom:.6rem; border-bottom:1px solid var(--line); }
+.presets { display:flex; flex-wrap:wrap; gap:.3rem; }
+.presets a { font-size:.85em; padding:.2rem .6rem; border:1px solid var(--line); border-radius:12px; color:var(--ink2); text-decoration:none; }
+.presets a.on { border-color:var(--blue); color:var(--ink); }
+.notice { border:1px solid var(--line); border-left:3px solid var(--blue); padding:.4rem .7rem; border-radius:6px; }
+.warn-text { color:var(--bad); }
+/* Hub badge: a cloud in the card's top-right corner (the hub is what talks to the myenergi cloud). */
+.card { position:relative; }
+.card.is-hub .card-head { padding-right:4.4rem; }
+.hub-badge { position:absolute; top:.6rem; right:.75rem; width:3.8rem; line-height:0; cursor:help; }
+.hub-badge svg { width:100%; height:auto; overflow:visible; }
+.hub-badge path { fill:var(--hub-fill); stroke:var(--blue); stroke-width:2; stroke-linejoin:round; }
+.hub-badge text { fill:var(--blue); font:700 14px system-ui, -apple-system, "Segoe UI", sans-serif; letter-spacing:.02em; }
+.device-meta { margin:.1rem 0 0; color:var(--ink2); font-size:.85em; font-variant-numeric:tabular-nums; }

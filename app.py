@@ -4,16 +4,19 @@ import os
 import re
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 
 from flask import Flask, abort, jsonify, redirect, render_template, request, send_file, url_for
 import io
+from urllib.parse import urlencode
 
 import charts
+import recorder
 from auth import init_auth
 import live_chart
-from devices import summarise
+from devices import format_duration, summarise
 from myenergi_client import MyEnergiClient, MyEnergiError
 
 ID_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -61,6 +64,10 @@ def create_app(test_config=None):
         REFRESH_SECONDS=int(os.environ.get("REFRESH_SECONDS", "15")),
         MAX_CONTENT_LENGTH=25 * 1024 * 1024,
         UPLOAD_DIR=os.path.join(app.instance_path, "uploads"),
+        DB_PATH=os.path.join(app.instance_path, "readings.db"),
+        RECORD=os.environ.get("RECORD", "1").lower() not in ("0", "false", "no"),
+        POLL_SECONDS=int(os.environ.get("POLL_SECONDS", "15")),
+        RETENTION_DAYS=int(os.environ.get("RETENTION_DAYS", "180")),
     )
     if test_config:
         app.config.update(test_config)
@@ -71,6 +78,9 @@ def create_app(test_config=None):
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
     os.makedirs(app.config["UPLOAD_DIR"], exist_ok=True)
     init_auth(app)   # no-op unless APP_PASSWORD is set
+    app.add_template_filter(format_duration, "duration")
+    os.makedirs(os.path.dirname(app.config["DB_PATH"]) or ".", exist_ok=True)
+    store = app.extensions["store"] = recorder.Store(app.config["DB_PATH"])
 
     def get_client():
         if "client" not in app.extensions:
@@ -86,6 +96,14 @@ def create_app(test_config=None):
             if "grid" in names.get(s, "").lower():
                 return s
         return serials[0]
+
+    # ---- always-on recording -----------------------------------------------
+    # Polls the API in the background for as long as the app runs (one gunicorn worker = one recorder).
+    rec = None
+    if app.config["RECORD"] and app.config["HUB_SERIAL"] and app.config["API_KEY"] and not app.config.get("TESTING"):
+        rec = app.extensions["recorder"] = recorder.Recorder(
+            store, lambda: get_client().status(), app.config["POLL_SECONDS"], app.config["RETENTION_DAYS"])
+        rec.start()
 
     # ---- live values -------------------------------------------------------
     # Which CT clamps to display is a per-device choice, kept on disk (single-user local app).
@@ -112,8 +130,10 @@ def create_app(test_config=None):
                 c["shown"] = c["slot"] in slots
         return devices
 
-    # CT readings seen since the app started; grows each time the dashboard polls.
+    # Live CT chart: drawn from the recorded readings when recording is on (so it survives restarts);
+    # otherwise from readings seen since the app started, growing each time the dashboard polls.
     ct_history = live_chart.CtHistory()
+    CHART_WINDOW_S = 2 * 3600
 
     # A photo dropped into static/img/devices/ (e.g. zappi.jpg) wins over the bundled illustration.
     image_dir = Path(app.static_folder) / "img" / "devices"
@@ -124,12 +144,23 @@ def create_app(test_config=None):
                 return f"img/devices/{kind}.{ext}"
         return "img/devices/device.svg"
 
+    def current_status():
+        """The recorder's latest poll when it's fresh (one API call serves both), else ask the API."""
+        rec = app.extensions.get("recorder")
+        if rec and rec.latest and time.time() - rec.latest[0] < 2 * rec.interval + 5:
+            return rec.latest[1]
+        return get_client().status()
+
     def live_devices():
-        devices = apply_ct_prefs(summarise(get_client().status(), app.config["HARVI_NAMES"]))
+        devices = apply_ct_prefs(summarise(current_status(), app.config["HARVI_NAMES"]))
         for d in devices:
             d["image"] = url_for("static", filename=device_image(d["kind"]))
-            ct_history.record(d)
-            d["ct_chart"] = live_chart.build(ct_history.points(d), d["cts"])
+            if app.extensions.get("recorder"):
+                points = store.recent_points(d["kind"], d["sno"], time.time() - CHART_WINDOW_S)
+            else:
+                ct_history.record(d)
+                points = ct_history.points(d)
+            d["ct_chart"] = live_chart.build(points, d["cts"])
         return devices
 
     @app.post("/ct-prefs/<kind>/<sno>")
@@ -207,11 +238,12 @@ def create_app(test_config=None):
     @app.context_processor
     def nav_links():
         cur = get_current()
+        upload_link = None
         if cur:
-            link = url_for("report", log_id=cur["id"]) + ("?" + cur["query"] if cur["query"] else "")
-        else:
-            link = url_for("upload")
-        return {"report_link": link, "has_current_report": cur is not None}
+            upload_link = url_for("report", log_id=cur["id"]) + ("?" + cur["query"] if cur["query"] else "")
+        # "Graphs" opens the report on recorded data; an uploaded CSV report stays one click away.
+        return {"report_link": url_for("stored_report"), "upload_report_link": upload_link,
+                "has_current_report": cur is not None}
 
     def cleanup_uploads():
         cutoff = time.time() - UPLOAD_MAX_AGE_S
@@ -268,7 +300,8 @@ def create_app(test_config=None):
         cur = get_current()
         if cur and cur["id"] == log_id and cur["query"] != request.query_string.decode():
             set_current(log_id, request.query_string.decode())      # remember the chosen settings too
-        return render_template("report.html", log_id=log_id, log=log, params=params, stats=stats,
+        return render_template("report.html", source="upload", png_url=url_for("report_png", log_id=log_id),
+                               log_id=log_id, log=log, params=params, stats=stats,
                                serials=log.serials("harvi"), names=app.config["HARVI_NAMES"],
                                query=request.query_string.decode())
 
@@ -286,6 +319,89 @@ def create_app(test_config=None):
         png = render_cached(str(p), p.stat().st_mtime, tuple(sorted(app.config["HARVI_NAMES"].items())),
                             theme=theme, **params)
         return send_file(io.BytesIO(png), mimetype="image/png", download_name=f"harvi_report_{log_id[:8]}.png")
+
+    # ---- report from recorded data -------------------------------------------
+    MAX_SPAN = timedelta(days=31)          # keeps chart drawing quick (~0.5M rows at 15 s polling)
+    DT_FMT = "%Y-%m-%dT%H:%M"              # <input type="datetime-local">, read as UTC like the rest of the app
+
+    def parse_dt(s):
+        try:
+            return datetime.strptime(s or "", DT_FMT).replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+
+    def stored_range():
+        """The chosen [start, end], clamped to the recorded data; defaults to the last 24 hours."""
+        span = store.span()
+        if not span:
+            return None
+        lo = datetime.fromtimestamp(span[0], timezone.utc).replace(second=0)
+        hi = datetime.fromtimestamp(span[1], timezone.utc).replace(second=0) + timedelta(minutes=1)
+        clamp = lambda d: min(max(d, lo), hi)                               # noqa: E731
+        end = clamp(parse_dt(request.args.get("to")) or hi)
+        start = clamp(parse_dt(request.args.get("from")) or end - timedelta(hours=24))
+        note = None
+        if start > end:
+            start, end, note = end, start, "The start was after the end, so the two were swapped."
+        elif start == end:                     # empty range (e.g. both outside the data): widen to 24 h
+            start = max(lo, end - timedelta(hours=24))
+            end = max(end, min(hi, start + timedelta(hours=24)))
+        if end - start > MAX_SPAN:
+            start, note = end - MAX_SPAN, "Reports cover at most 31 days, so the start was moved forward."
+        presets = [(label, {"from": max(lo, hi - d).strftime(DT_FMT), "to": hi.strftime(DT_FMT)})
+                   for label, d in (("Last 6 h", timedelta(hours=6)), ("Last 24 h", timedelta(days=1)),
+                                    ("Last 7 days", timedelta(days=7)), ("Last 31 days", MAX_SPAN))]
+        return {"lo": lo, "hi": hi, "start": start, "end": end, "note": note, "presets": presets,
+                "from_s": start.strftime(DT_FMT), "to_s": end.strftime(DT_FMT)}
+
+    @lru_cache(maxsize=2)
+    def stored_log(start_ts, end_ts, last_poll):      # last_poll in the key: new data invalidates the cache
+        return store.load_log(start_ts, end_ts)
+
+    @lru_cache(maxsize=4)
+    def render_stored(start_ts, end_ts, last_poll, names, **params):
+        return charts.render_png(stored_log(start_ts, end_ts, last_poll), names=dict(names), **params)
+
+    def stored_inputs():
+        r = stored_range()
+        if r is None:
+            return None, None, None
+        start_ts, end_ts = int(r["start"].timestamp()), int(r["end"].timestamp())
+        key = (start_ts, end_ts, store.last_poll_before(end_ts))
+        return r, key, stored_log(*key)
+
+    def recording_status():
+        rec = app.extensions.get("recorder")
+        fmt = lambda ts: datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d %H:%M:%S")   # noqa: E731
+        return {"on": rec is not None, "interval": app.config["POLL_SECONDS"],
+                "retention": app.config["RETENTION_DAYS"],
+                "last_ok": fmt(rec.last_ok) if rec and rec.last_ok else None,
+                "last_error": (fmt(rec.last_error[0]), rec.last_error[1]) if rec and rec.last_error and
+                              (not rec.last_ok or rec.last_error[0] > rec.last_ok) else None}
+
+    @app.get("/report")
+    def stored_report():
+        r, key, lg = stored_inputs()
+        status = recording_status()
+        if r is None or not lg.serials("harvi"):
+            return render_template("report_empty.html", rng=r, recording=status)
+        params = report_params(lg)
+        query = urlencode({**request.args.to_dict(), "from": r["from_s"], "to": r["to_s"]})
+        return render_template("report.html", source="stored", png_url=url_for("stored_report_png"),
+                               rng=r, recording=status, log=lg, params=params,
+                               stats=charts.analyse(lg, **params), serials=lg.serials("harvi"),
+                               names=app.config["HARVI_NAMES"], query=query)
+
+    @app.get("/report.png")
+    def stored_report_png():
+        r, key, lg = stored_inputs()
+        if r is None or not lg.serials("harvi"):
+            abort(404)
+        theme = "dark" if request.args.get("theme") == "dark" else "light"
+        png = render_stored(*key, tuple(sorted(app.config["HARVI_NAMES"].items())), theme=theme,
+                            **report_params(lg))
+        name = f"harvi_report_{r['start']:%Y%m%d-%H%M}_{r['end']:%Y%m%d-%H%M}.png"
+        return send_file(io.BytesIO(png), mimetype="image/png", download_name=name)
 
     return app
 
