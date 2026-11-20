@@ -599,7 +599,8 @@ def test_energy_page(tmp_path):
     a.config["NOW"] = 1795000000 + 3 * 3600
     c = a.test_client()
     html = c.get("/energy").get_data(as_text=True)
-    assert "Home energy use" in html and "Running total" in html and "Per half hour" in html
+    assert "Home energy use" in html and "Energy usage" in html and ">Running total <" not in html and "Per half hour" in html
+    assert 'class="use-area use-home"' in html and 'class="use-area use-charge"' in html   # battery charging layer
     # this data imports 4 kW against 4 kW of demand (home, hot water, battery charging): all from the grid
     assert "From solar &amp; battery" in html and 'class="bar grid' in html and 'class="bar solar' not in html
     assert "Imported from the grid" in html and 'class="eplot imports"' in html and 'class="ibar home"' in html
@@ -623,10 +624,11 @@ def test_estimate_combines_measured_and_sampled(tmp_path):
     with st._conn() as c:
         c.executemany("INSERT INTO flows VALUES (?, ?, ?, ?, ?, ?)", rows)
     # the hub measured 1.5 kW import and 0.5 kW to the Eddi every minute of the first 50 minutes
-    st.save_minutes("2026-11-18", [(m, 1500 * 60, 0, 500 * 60) for m in range(t0, t0 + 3000, 60)], complete=False)
+    st.save_minutes("2026-11-18", [(m, 1500 * 60, 0, 500 * 60, None, None) for m in range(t0, t0 + 3000, 60)], complete=False)
     hh = estimate.compute(st, t0, t0 + 3600)
-    home, grid, var, covered, measured, sampled, imp, exp_, g_batt, g_dev = hh[t0]
+    home, grid, var, covered, measured, sampled, imp, exp_, g_batt, g_dev, eddi, zappi, charge = hh[t0]
     assert abs(imp - 0.75) < 1e-9 and exp_ == 0 and g_batt == 0
+    assert abs(eddi - 0.25) < 1e-9 and zappi == 0 and charge == 0     # old-style rows: diversion counts as Eddi
     assert abs(g_dev - 0.15) < 0.01 and abs(grid + g_batt + g_dev - imp) < 0.01   # import fully accounted for
     assert abs(home - 1.0) < 0.01                       # 1.5 kW + 1 kW solar - 0.5 kW Eddi = 2 kW for 30 min
     assert abs(grid - 0.6) < 0.01                       # 1.5 kW of the 2.5 kW demand came from the grid
@@ -641,7 +643,7 @@ def test_estimate_combines_measured_and_sampled(tmp_path):
         c.execute("UPDATE flows SET solar = 1000")
     assert estimate.compute(st, t0, t0 + 1800)[t0][2] == 0
     # final half hours are cached once their day's history is complete
-    st.save_minutes(_day(t0), [(m, 1500 * 60, 0, 500 * 60) for m in range(t0, t0 + 3600, 60)], complete=True)
+    st.save_minutes(_day(t0), [(m, 1500 * 60, 0, 500 * 60, 500 * 60, 0) for m in range(t0, t0 + 3600, 60)], complete=True)
     with st._conn() as c:
         c.execute("INSERT OR REPLACE INTO history_days VALUES (?, 0, 1)", (_day(t0),))
     got = estimate.half_hours(st, t0, t0 + 3600, now=t0 + 86400 * 2)
@@ -677,7 +679,7 @@ def test_history_sync(tmp_path):
     hist = st.history_days()
     assert not hist[_day(now)][1] and hist[_day(now - 86400)][1]                     # today isn't complete
     m = st.minutes(now - 86400, now - 86400 + 60)
-    assert list(m.values()) == [(600, 60, 360)]       # hub's import/export; Eddi + Zappi diverted/boosted
+    assert list(m.values()) == [(600, 60, 360, 120, 240)]   # hub's import/export; Eddi + Zappi, then each
     assert st._conn().execute("SELECT COUNT(*) FROM minutes").fetchone()[0] == 3 * 1440   # the 1441st minute is dropped
     calls.clear()
     assert rec.sync_history(status, now + 600) == [_day(now)] and len(calls) == 2   # only today again
@@ -691,15 +693,30 @@ def test_estimate_overnight_battery_charging(tmp_path):
     with st._conn() as c:
         c.executemany("INSERT INTO flows VALUES (?, ?, ?, ?, ?, ?)",
                       [(t, 3900, -3400, 0, 0, 500) for t in range(t0, t0 + 1800, 15)])
-    st.save_minutes("2026-11-18", [(m, 3900 * 60, 0, 0) for m in range(t0, t0 + 1800, 60)], complete=False)
-    st.save_minutes("2026-11-17", [(m, 1000 * 60, 0, 0) for m in range(t0 - 1800, t0, 60)], complete=False)
+    st.save_minutes("2026-11-18", [(m, 3900 * 60, 0, 0, 0, 0) for m in range(t0, t0 + 1800, 60)], complete=False)
+    st.save_minutes("2026-11-17", [(m, 1000 * 60, 0, 0, 0, 0) for m in range(t0 - 1800, t0, 60)], complete=False)
     hh = estimate.compute(st, t0 - 1800, t0 + 1800)
-    home, grid, _, _, _, _, imp, _, g_batt, g_dev = hh[t0]
+    home, grid, _, _, _, _, imp, _, g_batt, g_dev, _, _, charge = hh[t0]
+    assert abs(charge - 1.7) < 1e-6
     assert abs(imp - 1.95) < 1e-9 and abs(home - 0.25) < 1e-6 and abs(grid - 0.25) < 1e-6
     assert abs(g_batt - 1.7) < 1e-6 and g_dev == 0
     # before recording started there's measured import but no solar & battery reading: counted, not attributed
     before = hh[t0 - 1800]
     assert abs(before[6] - 0.5) < 1e-9 and before[0] == before[1] == before[8] == 0 and before[3] == 0
+
+
+def test_minutes_table_upgrade(tmp_path):
+    """A database from before Eddi and Zappi were kept apart gains the columns and refetches its history."""
+    import sqlite3, recorder
+    db = tmp_path / "old.db"
+    c = sqlite3.connect(db)
+    c.executescript("""CREATE TABLE minutes (ts INTEGER PRIMARY KEY, imp REAL, exp REAL, div REAL);
+                       CREATE TABLE history_days (day TEXT PRIMARY KEY, fetched INTEGER, complete INTEGER);
+                       INSERT INTO minutes VALUES (60, 1, 2, 3); INSERT INTO history_days VALUES ('2026-11-19', 1, 1);""")
+    c.commit()
+    c.close()
+    st = recorder.Store(db)
+    assert st.minutes(0, 120) == {60: (1, 2, 3, None, None)} and st.history_days() == {}
 
 
 if __name__ == "__main__":
@@ -710,7 +727,7 @@ if __name__ == "__main__":
                test_stored_report, test_stored_report_long_range_and_empty, test_live_chart_from_recorded_data,
                test_stored_report_with_recording_gap, test_overview_page, test_energy_buckets_and_totals,
                test_flow_recording_and_backfill, test_energy_page, test_estimate_combines_measured_and_sampled,
-               test_history_sync, test_estimate_overnight_battery_charging):
+               test_history_sync, test_estimate_overnight_battery_charging, test_minutes_table_upgrade):
         with tempfile.TemporaryDirectory() as d:
             fn(Path(d))
             print("ok", fn.__name__)

@@ -204,13 +204,13 @@ button.secondary { background:var(--card); color:var(--ink); border:1px solid va
 .energy-table summary { cursor:pointer; color:var(--ink2); font-size:.9em; }
 @media (max-width: 560px) { .energy-chart .xaxis .minor { display:none; } }
 @media (max-width: 560px) { .energy-chart .legend { margin-left:0; flex-basis:100%; } }
-.eplot .cum-range { fill:var(--home); fill-opacity:.18; }
+.eplot .cum-range { fill:var(--ink); fill-opacity:.12; }
 .eplot .err { fill:none; stroke:var(--ink); stroke-opacity:.55; stroke-width:1.2; vector-effect:non-scaling-stroke; }
 .table-scroll { overflow-x:auto; }
 .energy-table td.muted { font-size:inherit; }
 /* Grid import: where the imported energy went. Home = the grid part of the home's use (same orange). */
-.energy-chart, .import-card { --imp-home:#c2410c; --imp-batt:#6d28d9; --imp-dev:#0891b2; --imp-unattr:#b8b7b2; }
-:root[data-theme="dark"] .energy-chart, :root[data-theme="dark"] .import-card { --imp-home:#f29a55; --imp-batt:#a78bfa; --imp-dev:#22d3ee; --imp-unattr:#6b6a65; }
+.energy-chart, .import-card { --imp-home:#c2410c; --imp-batt:#6250d6; --imp-dev:#eda100; --imp-unattr:#b8b7b2; }
+:root[data-theme="dark"] .energy-chart, :root[data-theme="dark"] .import-card { --imp-home:#f29a55; --imp-batt:#9085e9; --imp-dev:#c98500; --imp-unattr:#6b6a65; }
 .eplot.imports { height:110px; margin-bottom:0 !important; }
 .eplot.bars { margin-bottom:1.1rem !important; }
 .eplot .ibar.home { fill:var(--imp-home); } .eplot .ibar.batt { fill:var(--imp-batt); }
@@ -232,3 +232,18 @@ button.secondary { background:var(--card); color:var(--ink); border:1px solid va
 .import-legend b { font-variant-numeric:tabular-nums; margin-left:.2rem; }
 .small-note { font-size:.78em; margin:.4rem 0 0; }
 @media (max-width: 560px) { .eplot.imports { height:90px; } }
+/* Energy usage: stacked cumulative layers (order and colours checked for colour-blind separation) */
+.energy-chart { --use-home:#2a78d6; --use-eddi:#eda100; --use-charge:#6250d6; --use-zappi:#e87ba4; --use-export:#5f5e5a; }
+:root[data-theme="dark"] .energy-chart { --use-home:#3987e5; --use-eddi:#c98500; --use-charge:#9085e9; --use-zappi:#d55181; --use-export:#b8b7b0; }
+.eplot .use-area { fill-opacity:.85; }
+.eplot .use-home { fill:var(--use-home); } .eplot .use-eddi { fill:var(--use-eddi); } .eplot .use-charge { fill:var(--use-charge); }
+.eplot .use-zappi { fill:var(--use-zappi); } .eplot .use-export { fill:var(--use-export); }
+.eplot .use-edge { fill:none; stroke:var(--card); stroke-width:1.5; vector-effect:non-scaling-stroke; }
+.energy-chart .legend i.use-home, .energy-chart .row-use-home i { background:var(--use-home); }
+.energy-chart .legend i.use-eddi, .energy-chart .row-use-eddi i { background:var(--use-eddi); }
+.energy-chart .legend i.use-charge, .energy-chart .row-use-charge i { background:var(--use-charge); }
+.energy-chart .legend i.use-zappi, .energy-chart .row-use-zappi i { background:var(--use-zappi); }
+.energy-chart .legend i.use-export, .energy-chart .row-use-export i { background:var(--use-export); }
+.energy-chart .legend > span { white-space:nowrap; }
+.energy-chart .legend { flex-wrap:wrap; }
+.eplot .cum-end { background:var(--ink); }

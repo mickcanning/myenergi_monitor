@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS flows (
 -- grid import/export, and what the Eddi and Zappi diverted or boosted.
 CREATE TABLE IF NOT EXISTS minutes (
     ts INTEGER PRIMARY KEY,    -- minute start, unix seconds (UTC)
-    imp REAL, exp REAL, div REAL
+    imp REAL, exp REAL, div REAL,  -- div = eddi + zappi
+    eddi REAL, zappi REAL
 );
 -- Which UTC days of history have been fetched; complete = the day was over when it was fetched.
 CREATE TABLE IF NOT EXISTS history_days (
@@ -45,10 +46,11 @@ CREATE TABLE IF NOT EXISTS history_days (
 -- Finished half-hour home energy estimates (see estimate.FIELDS), so long ranges draw quickly. It's only a
 -- cache: when its columns change it gets a new name and the old one is dropped.
 DROP TABLE IF EXISTS energy_hh;
-CREATE TABLE IF NOT EXISTS energy_hh2 (
+DROP TABLE IF EXISTS energy_hh2;
+CREATE TABLE IF NOT EXISTS energy_hh3 (
     hh INTEGER PRIMARY KEY,
     home REAL, grid REAL, var REAL, covered REAL, measured REAL, sampled REAL,
-    imp REAL, exp REAL, grid_batt REAL, grid_dev REAL
+    imp REAL, exp REAL, grid_batt REAL, grid_dev REAL, eddi REAL, zappi REAL, charge REAL
 );
 """
 
@@ -76,7 +78,14 @@ class Store:
     def __init__(self, path):
         self.path = str(path)
         self._local = threading.local()
-        self._conn().executescript(SCHEMA)
+        c = self._conn()
+        c.executescript(SCHEMA)
+        cols = {r[1] for r in c.execute("PRAGMA table_info(minutes)")}
+        if "eddi" not in cols:          # older database: keep the Eddi and Zappi apart from now on
+            with c:
+                c.execute("ALTER TABLE minutes ADD COLUMN eddi REAL")
+                c.execute("ALTER TABLE minutes ADD COLUMN zappi REAL")
+                c.execute("DELETE FROM history_days")        # so the next sync fetches them again
 
     def _conn(self):
         c = getattr(self._local, "conn", None)
@@ -206,18 +215,20 @@ class Store:
     def save_minutes(self, day, rows, complete, now=None):
         """rows: [(minute ts, imp J, exp J, div J)] for one UTC day."""
         with self._conn() as c:
-            c.executemany("INSERT OR REPLACE INTO minutes VALUES (?, ?, ?, ?)", rows)
+            c.executemany("INSERT OR REPLACE INTO minutes (ts, imp, exp, div, eddi, zappi) VALUES (?, ?, ?, ?, ?, ?)",
+                          rows)
             c.execute("INSERT OR REPLACE INTO history_days VALUES (?, ?, ?)",
                       (day, int(now or time.time()), 1 if complete else 0))
             start = int(datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
-            c.execute("DELETE FROM energy_hh2 WHERE hh >= ? AND hh < ?", (start, start + 86400))
+            c.execute("DELETE FROM energy_hh3 WHERE hh >= ? AND hh < ?", (start, start + 86400))
 
     def history_days(self):
         return {d: (f, bool(cp)) for d, f, cp in self._conn().execute("SELECT * FROM history_days")}
 
     def minutes(self, start_ts, end_ts):
-        return {ts: (imp, exp, div) for ts, imp, exp, div in self._conn().execute(
-            "SELECT ts, imp, exp, div FROM minutes WHERE ts >= ? AND ts < ?", (int(start_ts), int(end_ts)))}
+        return {ts: (imp, exp, div, eddi, zappi) for ts, imp, exp, div, eddi, zappi in self._conn().execute(
+            "SELECT ts, imp, exp, div, eddi, zappi FROM minutes WHERE ts >= ? AND ts < ?",
+            (int(start_ts), int(end_ts)))}
 
     def complete_until(self):
         """End (unix s) of the latest UTC day whose history is complete, or None."""
@@ -236,17 +247,17 @@ class Store:
     # -- cached half-hour estimates ------------------------------------------
     def cached_hh(self, start_ts, end_ts):
         return {r[0]: r[1:] for r in self._conn().execute(
-            "SELECT hh, home, grid, var, covered, measured, sampled, imp, exp, grid_batt, grid_dev "
-            "FROM energy_hh2 WHERE hh >= ? AND hh < ?", (int(start_ts), int(end_ts)))}
+            "SELECT hh, home, grid, var, covered, measured, sampled, imp, exp, grid_batt, grid_dev, eddi, zappi, charge "
+            "FROM energy_hh3 WHERE hh >= ? AND hh < ?", (int(start_ts), int(end_ts)))}
 
     def cache_hh(self, rows):
         with self._conn() as c:
-            c.executemany("INSERT OR REPLACE INTO energy_hh2 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+            c.executemany("INSERT OR REPLACE INTO energy_hh3 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
 
     def prune(self, before_ts):
         with self._conn() as c:
             c.execute("DELETE FROM minutes WHERE ts < ?", (int(before_ts),))
-            c.execute("DELETE FROM energy_hh2 WHERE hh < ?", (int(before_ts),))
+            c.execute("DELETE FROM energy_hh3 WHERE hh < ?", (int(before_ts),))
             c.execute("DELETE FROM history_days WHERE day < ?", (_utc(before_ts).strftime("%Y-%m-%d"),))
             c.execute("DELETE FROM flows WHERE poll < ?", (int(before_ts),))
             return c.execute("DELETE FROM readings WHERE poll < ?", (int(before_ts),)).rowcount
@@ -328,16 +339,17 @@ class Recorder(threading.Thread):
                 per_min = {}
                 for kind, sno, _ in devices:
                     for ts, f in self.get_history(kind, sno, day):
-                        m = per_min.setdefault(ts, [None, None, 0.0])
+                        m = per_min.setdefault(ts, [None, None, 0.0, 0.0])
                         if (kind, sno) == hub[:2]:
                             m[0], m[1] = f.get("imp", 0), f.get("exp", 0)
-                        m[2] += sum(v for k, v in f.items() if len(k) == 3 and k[0] == "h" and k[1] in "123"
-                                    and k[2] in "db")
+                        used = sum(v for k, v in f.items() if len(k) == 3 and k[0] == "h" and k[1] in "123"
+                                   and k[2] in "db")
+                        m[2 if kind == "eddi" else 3] += used
             except Exception as e:                       # try again next sync
                 log.warning("recorder: history for %s failed: %s", day, e)
                 break
             day_start = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp()
-            rows = [(ts, m[0], m[1], m[2]) for ts, m in per_min.items()
+            rows = [(ts, m[0], m[1], m[2] + m[3], m[2], m[3]) for ts, m in per_min.items()
                     if m[0] is not None and day_start <= ts < day_start + 86400]
             self.store.save_minutes(day, rows, complete=now > day_start + 86400 + 1800, now=now)
             done.append(day)

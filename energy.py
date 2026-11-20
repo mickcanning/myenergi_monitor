@@ -13,6 +13,10 @@ from zoneinfo import ZoneInfo
 import estimate
 
 PERIODS = ("day", "week", "month", "year")
+# Where the energy went, bottom to top of the Energy usage chart: (key, label)
+USES = ("home", "eddi", "charge", "zappi", "export")     # this order keeps neighbouring colours distinct
+USE_LABELS = {"home": "Home", "eddi": "Hot water", "zappi": "Car", "charge": "Battery charging",
+              "export": "Exported"}
 BUCKET_WORD = {"day": "half hour", "week": "day", "month": "day", "year": "month"}
 
 
@@ -93,18 +97,21 @@ def summarise(store, period, day, tz, now_ts):
     halves = estimate.half_hours(store, lo, min(hi, now_ts + 1800), now_ts)
     starts = [b[0] for b in bks]
     n = len(bks)
-    kwh, from_grid, var, covered, measured, sampled, imp, exp_, g_batt, g_dev = ([0.0] * n for _ in range(10))
+    arrs = [[0.0] * n for _ in estimate.FIELDS]
+    kwh, from_grid, var, covered, measured, sampled, imp, exp_, g_batt, g_dev, eddi, zappi, charge = arrs
     for hh, vals in halves.items():
         i = bisect_right(starts, hh) - 1
         if 0 <= i < n:
-            for arr, v in zip((kwh, from_grid, var, covered, measured, sampled, imp, exp_, g_batt, g_dev), vals):
+            for arr, v in zip(arrs, vals):
                 arr[i] += v or 0
+    use_cum = {k: 0.0 for k in USES}
     rows, total, total_grid, total_var, total_sampled = [], 0.0, 0.0, 0.0, 0.0
     imp_t = {"imp": 0.0, "exp": 0.0, "home": 0.0, "batt": 0.0, "dev": 0.0}
     for k, (a, b, short, long) in enumerate(bks):
         e, g = kwh[k], min(max(from_grid[k], 0.0), max(kwh[k], 0.0))
         future = a >= now_ts
         span = max(1.0, min(b, now_ts) - a)                       # only the part of the bucket that has happened
+        uses_k = {"home": e, "eddi": eddi[k], "charge": charge[k], "zappi": zappi[k], "export": exp_[k]}
         # where this slot's grid import went; anything we couldn't attribute (no solar & battery reading)
         dest = {"home": g, "batt": g_batt[k], "dev": g_dev[k]}
         unattr = max(imp[k] - sum(dest.values()), 0.0)
@@ -115,6 +122,8 @@ def summarise(store, period, day, tz, now_ts):
             total_sampled += sampled[k]
             for key, v in (("imp", imp[k]), ("exp", exp_[k]), *dest.items()):
                 imp_t[key] += v
+            for key, v in uses_k.items():
+                use_cum[key] += v
         rows.append({"start": a, "end": b, "label": short, "long": long, "kwh": None if future else e,
                      "grid": None if future else g, "solar": None if future else max(e - g, 0.0),
                      "err": None if future else estimate.ci95(var[k]),
@@ -122,6 +131,8 @@ def summarise(store, period, day, tz, now_ts):
                      "cum": None if future else total, "cum_err": None if future else estimate.ci95(total_var),
                      "coverage": None if future else min(1.0, covered[k] / span),
                      "measured": None if future else min(1.0, measured[k] / span),
+                     "uses": None if future else uses_k,
+                     "uses_cum": None if future else dict(use_cum),
                      "imp": None if future else imp[k], "exp": None if future else exp_[k],
                      "imp_home": None if future else g, "imp_batt": None if future else g_batt[k],
                      "imp_dev": None if future else g_dev[k], "imp_unattr": None if future else unattr,
@@ -137,6 +148,7 @@ def summarise(store, period, day, tz, now_ts):
             "coverage": sum(r["coverage"] * w for r, w in zip(past, spans)) / span if span else 0.0,
             "measured": sum(r["measured"] * w for r, w in zip(past, spans)) / span if span else 0.0,
             "busiest": busiest, "in_progress": lo <= now_ts < hi, "future": lo > now_ts,
+            "uses": use_cum, "uses_total": sum(use_cum.values()),
             "imports": {**imp_t, "unattr": max(imp_t["imp"] - imp_t["home"] - imp_t["batt"] - imp_t["dev"], 0.0)},
             "bucket_word": BUCKET_WORD[period]}
 
@@ -165,7 +177,10 @@ def chart(s):
     n = len(rows)
     col = 1000 / n
 
-    cum_max, cum_step = _nice_max(max([(r["cum"] or 0) + (r["cum_err"] or 0) for r in rows] + [0]))
+    # stacked cumulative layers, bottom to top; home is always shown, the rest only if they happened
+    shown = [k for k in USES if k == "home" or s["uses"][k] >= 0.005]
+    tops = [sum((r["uses_cum"] or {}).get(k, 0) for k in shown) for r in rows if r["uses_cum"]]
+    cum_max, cum_step = _nice_max(max(tops + [(r["cum"] or 0) + (r["cum_err"] or 0) for r in rows] + [0]))
     bar_max, bar_step = _nice_max(max([(r["kwh"] or 0) + (r["err"] or 0) for r in rows] + [0]))
 
     def y(v, mx):
@@ -177,6 +192,20 @@ def chart(s):
             break
         pts.append((round((i + 1) * col, 2), y(r["cum"], cum_max)))
     line = " ".join(f"{x},{yy}" for x, yy in pts)
+    xs = [0] + [round((i + 1) * col, 2) for i, r in enumerate(rows) if r["uses_cum"] is not None]
+    base = [0.0] * len(xs)
+    layers = []
+    for k in shown:
+        vals = [0.0] + [r["uses_cum"][k] for r in rows if r["uses_cum"] is not None]
+        top = [b + v for b, v in zip(base, vals)]
+        if len(xs) > 1:
+            up = " L".join(f"{x},{y(t, cum_max)}" for x, t in zip(xs, top))
+            down = " L".join(f"{x},{y(b, cum_max)}" for x, b in reversed(list(zip(xs, base))))
+            layers.append({"key": k, "label": USE_LABELS[k], "total": s["uses"][k],
+                           "area": f"M{up} L{down} Z",
+                           "line": " ".join(f"{x},{y(t, cum_max)}" for x, t in zip(xs, top))})
+        base = top
+    stack_total = base[-1] if base else 0.0
     area = ("M0,100 L" + " L".join(f"{x},{yy}" for x, yy in pts) + f" L{pts[-1][0]},100 Z") if len(pts) > 1 else ""
     # likely range of the running total (approximate 95%), as a band around the line
     upper, lower = [(0, 100)], [(0, 100)]
@@ -249,10 +278,13 @@ def chart(s):
 
     last = pts[-1] if len(pts) > 1 else None
     return {"line": line, "area": area, "band": band, "bars": bars, "xlabels": xlabels, "n": n,
+            "layers": layers, "stack_total": stack_total,
+            "stack_last": {"x": xs[-1] / 10, "y": y(stack_total, cum_max)} if len(xs) > 1 else None,
             "cum_ticks": ticks(cum_max, cum_step), "bar_ticks": ticks(bar_max, bar_step),
             "imp_bars": imp_bars, "imp_ticks": ticks(imp_max, imp_step),
             "last": {"x": last[0] / 10, "y": last[1]} if last else None,
             "partial": any(b["partial"] for b in bars),
+            "shown": [{"key": k, "label": USE_LABELS[k]} for k in shown],
             "hover": [{"l": r["long"], "k": None if r["kwh"] is None else round(r["kwh"], 3),
                        "i": None if r["imp"] is None else [round(r[k] or 0, 3) for k in
                                                            ("imp", "exp", "imp_home", "imp_batt", "imp_dev", "imp_unattr")],
@@ -263,4 +295,5 @@ def chart(s):
                        "s": None if r["solar"] is None else round(r["solar"], 3),
                        "g": None if r["grid"] is None else round(r["grid"], 3),
                        "c": None if r["cum"] is None else round(r["cum"], 3),
+                       "u": None if r["uses_cum"] is None else [round(r["uses_cum"][k], 3) for k in shown],
                        "p": None if r["coverage"] is None else round(r["coverage"] * 100)} for r in rows]}

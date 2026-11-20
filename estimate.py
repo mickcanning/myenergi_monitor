@@ -35,14 +35,15 @@ def _var(xs):
     return min(sum(d) / (2 * len(d)), pvariance(xs))
 
 
-FIELDS = ("home", "grid", "var", "covered", "measured", "sampled", "imp", "exp", "grid_batt", "grid_dev")
+FIELDS = ("home", "grid", "var", "covered", "measured", "sampled", "imp", "exp", "grid_batt", "grid_dev",
+          "eddi", "zappi", "charge")
 
 
 def compute(store, start, end):
     """{hh: tuple in FIELDS order} for half hours in [start, end) (both multiples of 1800):
     home kWh, of which from the grid kWh, variance kWh^2, covered s, measured s, sampled-only kWh,
     grid import kWh, grid export kWh, grid import that charged the battery kWh, and that went to the
-    Eddi/Zappi kWh. Import and export are the hub's measured totals whenever its history has the minute,
+    Eddi/Zappi kWh, then all energy to the Eddi (hot water), the Zappi (car) and into the battery kWh. Import and export are the hub's measured totals whenever its history has the minute,
     even if we have no solar samples then (so they match the myenergi app); the split of the import needs
     the solar & battery reading as well."""
     out = {}
@@ -73,6 +74,7 @@ def _compute_chunk(store, start, end):
         home_var = _var([s[5] for s in samples[i0:i1] if s[5] is not None]) or 0.0
 
         home = grid = var = covered = measured = imp_j = exp_j = g_batt = g_dev = 0.0
+        eddi_j = zappi_j = charge_j = 0.0
         for m in range(hh, hh + HH, 60):
             j0, j1 = bisect_left(t_all, m), bisect_left(t_all, m + 60)
             here = samples[j0:j1]
@@ -106,6 +108,12 @@ def _compute_chunk(store, start, end):
                 g = h * f
                 g_batt += charge * f * 60
                 g_dev += div * f * 60
+                charge_j += charge * 60
+                if meas[3] is None and meas[4] is None:     # history saved before Eddi/Zappi were split
+                    eddi_j += div * 60
+                else:
+                    eddi_j += (meas[3] or 0)
+                    zappi_j += (meas[4] or 0)
                 home += h * 60
                 grid += g * 60
                 var += s_var * 3600
@@ -129,11 +137,17 @@ def _compute_chunk(store, start, end):
                     gd += (ed + zp) * f
                     ip += max(gr, 0)
                     ep += max(-gr, 0)
+                ed_w = sum(s[3] or 0 for s in hs) / len(hs)
+                zp_w = sum(s[4] or 0 for s in hs) / len(hs)
+                ch_w = sum(max(-(s[2] or 0), 0) for s in hs) / len(hs)
                 k = len(hs)
                 home += h * 60
                 grid += g / k * 60
                 g_batt += gb / k * 60
                 g_dev += gd / k * 60
+                eddi_j += ed_w * 60
+                zappi_j += zp_w * 60
+                charge_j += ch_w * 60
                 if meas is None:                        # (measured import already counted above)
                     imp_j += ip / k * 60
                     exp_j += ep / k * 60
@@ -142,7 +156,8 @@ def _compute_chunk(store, start, end):
         smp = sampled.get(hh)
         res[hh] = (home / J_PER_KWH, grid / J_PER_KWH, var / J_PER_KWH ** 2, covered, measured,
                    smp[0] if smp else 0.0, imp_j / J_PER_KWH, exp_j / J_PER_KWH,
-                   g_batt / J_PER_KWH, g_dev / J_PER_KWH)
+                   g_batt / J_PER_KWH, g_dev / J_PER_KWH, eddi_j / J_PER_KWH, zappi_j / J_PER_KWH,
+                   charge_j / J_PER_KWH)
     return res
 
 
