@@ -27,6 +27,7 @@
     {% endif %}
 
     {% for n in flow.nodes %}
+    {% if n.key == 'home' %}<a href="{{ url_for('energy_page') }}" class="node-link" aria-label="Home energy use"><title>Show home energy use</title>{% endif %}
     <g class="node {{ n.cls }}">
       <circle cx="{{ n.x }}" cy="{{ n.y }}" r="{{ flow.node_r }}"/>
       <g class="icon" transform="translate({{ n.x - 18 }} {{ n.y - 18 }}) scale(1.5)">{{ n.icon | safe }}</g>
@@ -40,10 +41,11 @@
       {% for line in n.caption %}<text class="node-cap" x="{{ n.x }}" y="{{ n.y + 89 + loop.index0 * 13 }}" text-anchor="middle">{{ line }}</text>{% endfor %}
       {% endif %}
     </g>
+    {% if n.key == 'home' %}</a>{% endif %}
     {% endfor %}
   </svg>
   <figcaption class="muted">
-    Arrows show which way power is flowing. Home is estimated: grid + solar − hot water − car.
+    Arrows show which way power is flowing. Tap Home for energy use over time. Home is estimated: grid + solar − hot water − car.
   </figcaption>
 </figure>
 

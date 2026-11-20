@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}Home energy · myenergi monitor{% endblock %}
+{% block content %}
+<p class="crumb"><a href="{{ url_for('overview') }}">&larr; Overview</a></p>
+<h1>Home energy use</h1>
+
+<div class="energy-nav">
+  <div class="seg" role="group" aria-label="Period">
+    {% for p in periods %}
+    <a href="{{ url_for('energy_page', period=p, date=day) }}" {% if p == s.period %}class="on" aria-current="true"{% endif %}>{{ p | capitalize }}</a>
+    {% endfor %}
+  </div>
+  <div class="stepper">
+    <a href="{{ url_for('energy_page', period=s.period, date=nav.prev) }}" aria-label="Previous {{ s.period }}">&lsaquo;</a>
+    <span class="period-title">{{ s.title }}</span>
+    {% if nav.has_next %}
+    <a href="{{ url_for('energy_page', period=s.period, date=nav.next) }}" aria-label="Next {{ s.period }}">&rsaquo;</a>
+    {% else %}<span class="stepper-gap" aria-hidden="true">&rsaquo;</span>{% endif %}
+    {% if not nav.is_now %}<a class="now" href="{{ url_for('energy_page', period=s.period, date=nav.today) }}">Now</a>{% endif %}
+  </div>
+</div>
+
+{% if s.future %}
+<p class="muted">This {{ s.period }} hasn't started yet.</p>
+{% else %}
+<div class="energy-stats">
+  <div class="stat">
+    <span class="stat-label">{{ 'Used so far' if s.in_progress else 'Used' }}</span>
+    <span class="stat-value">{{ '%.1f' % s.total }} <small>kWh</small></span>
+  </div>
+  {% if s.self_pct is not none %}
+  <div class="stat">
+    <span class="stat-label">From solar &amp; battery</span>
+    <span class="stat-value">{{ s.self_pct }}<small>%</small></span>
+  </div>
+  {% endif %}
+  {% if s.busiest %}
+  <div class="stat">
+    <span class="stat-label">Busiest {{ s.bucket_word }}</span>
+    <span class="stat-value small">{{ s.busiest.long }} <small>· {{ '%.2f' % s.busiest.kwh if s.busiest.kwh < 10 else '%.1f' % s.busiest.kwh }} kWh</small></span>
+  </div>
+  {% endif %}
+  <div class="stat">
+    <span class="stat-label">Recorded</span>
+    <span class="stat-value small">{{ '%.0f' % (s.coverage * 100) }}% <small>of the time</small></span>
+  </div>
+</div>
+
+{% if s.total == 0 and s.coverage == 0 %}
+<p class="muted">No readings were recorded in this period.</p>
+{% else %}
+<figure class="energy-chart" data-hover='{{ ch.hover | tojson }}'>
+  <div class="panel-title">Running total <span class="muted">kWh</span></div>
+  <div class="eplot cum">
+    {% for t in ch.cum_ticks %}<span class="ytick" style="top:{{ t.y }}%">{{ t.text }}</span>{% endfor %}
+    <svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
+      {% for t in ch.cum_ticks %}<line class="grid" x1="0" x2="1000" y1="{{ t.y }}" y2="{{ t.y }}"/>{% endfor %}
+      {% if ch.area %}<path class="cum-area" d="{{ ch.area }}"/>{% endif %}
+      <polyline class="cum-line" points="{{ ch.line }}"/>
+      <line class="axis" x1="0" x2="1000" y1="100" y2="100"/>
+    </svg>
+    {% if ch.last %}
+    <i class="cum-end" style="left:{{ ch.last.x }}%; top:{{ ch.last.y }}%"></i>
+    <span class="cum-label" style="{{ 'right:' ~ (100 - ch.last.x) ~ '%' if ch.last.x > 50 else 'left:' ~ ch.last.x ~ '%' }}; top:{{ ch.last.y }}%">{{ '%.1f' % s.total }} kWh</span>
+    {% endif %}
+    <div class="band" hidden></div>
+  </div>
+  <div class="panel-title">Per {{ s.bucket_word }} <span class="muted">kWh</span>
+    <span class="legend"><span><i class="solar"></i>Solar &amp; battery {{ '%.1f' % s.total_solar }}</span><span><i class="grid"></i>Grid {{ '%.1f' % s.total_grid }}</span></span>
+  </div>
+  <div class="eplot bars">
+    {% for t in ch.bar_ticks %}<span class="ytick" style="top:{{ t.y }}%">{{ t.text }}</span>{% endfor %}
+    <svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
+      {% for t in ch.bar_ticks %}<line class="grid" x1="0" x2="1000" y1="{{ t.y }}" y2="{{ t.y }}"/>{% endfor %}
+      {% for b in ch.bars %}{% for p in b.parts %}<rect class="bar {{ p.cls }}{{ ' partial' if b.partial }}" x="{{ b.x }}" y="{{ p.y }}" width="{{ b.w }}" height="{{ p.h }}"/>{% endfor %}{% endfor %}
+      <line class="axis" x1="0" x2="1000" y1="100" y2="100"/>
+    </svg>
+    <div class="band" hidden></div>
+  </div>
+  <div class="xaxis">{% for l in ch.xlabels %}<span {% if l.minor %}class="minor" {% endif %}style="left:{{ l.x }}%">{{ l.text }}</span>{% endfor %}</div>
+  <div class="tip" hidden></div>
+  <figcaption class="muted">
+    Home use is estimated from the CTs (grid + solar − hot water − car). Grid's share is the grid import as a
+    share of everything being powered at the time, including hot water, the car and battery charging.
+    {% if ch.partial %}Paler bars were only partly recorded.{% endif %}
+    Times are {{ tz_name }}.
+  </figcaption>
+</figure>
+
+<details class="panel energy-table">
+  <summary>Show as a table</summary>
+  <table>
+    <thead><tr><th>{{ s.bucket_word | capitalize }}</th><th class="num">kWh</th><th class="num">Solar &amp; battery</th><th class="num">Grid</th><th class="num">Running total</th><th class="num">Recorded</th></tr></thead>
+    <tbody>
+    {% for r in s.rows if r.kwh is not none %}
+      <tr><td>{{ r.long }}</td><td class="num">{{ '%.2f' % r.kwh }}</td><td class="num">{{ '%.2f' % r.solar }}</td><td class="num">{{ '%.2f' % r.grid }}</td><td class="num">{{ '%.2f' % r.cum }}</td>
+          <td class="num">{{ '%.0f%%' % (r.coverage * 100) }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</details>
+{% endif %}
+{% endif %}
+
+<script>
+  (function () {
+    const fig = document.querySelector(".energy-chart");
+    if (!fig) return;
+    const data = JSON.parse(fig.dataset.hover), n = data.length;
+    const plots = fig.querySelectorAll(".eplot"), bands = fig.querySelectorAll(".band"), tip = fig.querySelector(".tip");
+    const word = {{ s.bucket_word | tojson }};
+    const fmt = (v) => (v < 10 ? v.toFixed(2) : v.toFixed(1)) + " kWh";
+    function show(e) {
+      const r = plots[0].getBoundingClientRect();
+      const i = Math.max(0, Math.min(n - 1, Math.floor((e.clientX - r.left) / r.width * n)));
+      const d = data[i];
+      bands.forEach((b) => { b.style.left = (i / n * 100) + "%"; b.style.width = (100 / n) + "%"; b.hidden = false; });
+      tip.innerHTML = `<div class="muted">${d.l}</div>` + (d.k == null ? "<div>Not yet</div>" :
+        `<div>Used <b>${fmt(d.k)}</b></div>` +
+        `<div class="row-solar"><i></i>Solar &amp; battery <b>${fmt(d.s)}</b></div>` +
+        `<div class="row-grid"><i></i>Grid <b>${fmt(d.g)}</b></div>` +
+        `<div class="muted">Running total ${fmt(d.c)}</div>` +
+        (d.p != null && d.p < 90 ? `<div class="muted">Recorded ${d.p}% of this ${word}</div>` : ""));
+      tip.hidden = false;
+      const fr = fig.getBoundingClientRect();
+      const cx = r.left - fr.left + (i + 0.5) / n * r.width;
+      tip.style.left = Math.max(4, Math.min(fr.width - tip.offsetWidth - 4, cx - tip.offsetWidth / 2)) + "px";
+    }
+    function hide() { bands.forEach((b) => b.hidden = true); tip.hidden = true; }
+    plots.forEach((p) => { p.addEventListener("pointermove", show); p.addEventListener("pointerdown", show); });
+    fig.addEventListener("pointerleave", hide);
+  })();
+</script>
+{% endblock %}

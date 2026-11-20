@@ -528,13 +528,97 @@ def test_overview_page(tmp_path):
     assert 'id="eddi-999"' in c.get("/live").get_data(as_text=True)
 
 
+def test_energy_buckets_and_totals(tmp_path):
+    from datetime import date, datetime as dt
+    from zoneinfo import ZoneInfo
+    import energy, recorder
+    tz = ZoneInfo("Europe/London")
+    st = recorder.Store(tmp_path / "e.db")
+    st._conn().execute("PRAGMA synchronous = OFF")
+    day0 = dt(2026, 3, 28, tzinfo=tz).timestamp()          # Sat 28 Mar; clocks go forward on Sun 29 Mar
+    rows = [(int(t), 0, 0, 0, 0, 1000.0) for t in range(int(day0), int(day0) + 3 * 86400, 15)]   # 1 kW flat
+    with st._conn() as c:
+        c.executemany("INSERT INTO flows VALUES (?, ?, ?, ?, ?, ?)", rows)
+    now = day0 + 3 * 86400 + 3600
+    s = energy.summarise(st, "day", date(2026, 3, 28), tz, now)
+    assert len(s["rows"]) == 48 and abs(s["total"] - 24) < 0.01 and s["rows"][0]["label"] == "00:00"
+    assert abs(s["rows"][-1]["cum"] - 24) < 0.01 and s["coverage"] > 0.99
+    dst = energy.summarise(st, "day", date(2026, 3, 29), tz, now)          # a 23-hour day
+    assert len(dst["rows"]) == 46 and abs(dst["total"] - 23) < 0.01
+    assert [r["label"] for r in dst["rows"][2:4]] == ["02:00", "02:30"]   # 01:00-01:59 doesn't exist that day
+    wk = energy.summarise(st, "week", date(2026, 3, 28), tz, now)
+    assert [r["label"] for r in wk["rows"]] == ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    assert abs(wk["total"] - (24 + 23)) < 0.05 and wk["rows"][0]["kwh"] == 0 and wk["coverage"] < 0.5
+    # periods that run into the future stop at now; a recording pause isn't stretched
+    cur = energy.summarise(st, "day", date(2026, 3, 31), tz, now)
+    assert cur["in_progress"] and cur["rows"][-1]["kwh"] is None and abs(cur["total"] - 1) < 0.02
+    yr = energy.summarise(st, "year", date(2026, 3, 31), tz, now)
+    assert len(yr["rows"]) == 12 and abs(yr["rows"][2]["kwh"] - 72) < 0.1 and yr["rows"][3]["kwh"] is None   # April: not yet
+    assert energy.shift("month", date(2026, 1, 31), 1) == date(2026, 2, 28)
+    assert energy.period_bounds("week", date(2026, 11, 20), tz)[2] == "Week of 16 – 22 Nov 2026"
+    assert s["self_pct"] == 100 and s["total_grid"] == 0           # grid 0 W: all from solar/battery
+
+    # the grid share: 1 kW home + 1 kW hot water, importing 500 W -> a quarter of home use came from the grid;
+    # with the battery charging at 1 kW too, 1.5 kW imported over 3 kW of demand -> half
+    st2 = recorder.Store(tmp_path / "split.db")
+    t1 = int(dt(2026, 6, 1, tzinfo=tz).timestamp())
+    with st2._conn() as c:
+        c.executemany("INSERT INTO flows VALUES (?, ?, ?, ?, ?, ?)",
+                      [(t, 500, 1500, 1000, 0, 1000) for t in range(t1, t1 + 3600, 15)] +
+                      [(t, 1500, -1000, 1000, 0, 1000) for t in range(t1 + 3600, t1 + 7200, 15)] +
+                      [(t, None, 0, 0, 0, 1000) for t in range(t1 + 7200, t1 + 10800, 15)])
+    sp = energy.summarise(st2, "day", date(2026, 6, 1), tz, t1 + 86400)
+    hours = [(round(r["solar"], 3), round(r["grid"], 3)) for r in sp["rows"][:6]]
+    assert hours[:2] == [(0.375, 0.125)] * 2 and hours[2:4] == [(0.25, 0.25)] * 2   # per half hour
+    assert hours[4] == (0.0, 0.5) and hours[5][0] == 0 and hours[5][1] > 0.49   # grid unknown: counted as grid
+    # (the very last reading has no next poll, so its 15 s aren't counted)
+    assert sp["self_pct"] == round(100 * 1.25 / sp["total"])
+    ch2 = energy.chart(sp)
+    assert [p["cls"] for p in ch2["bars"][0]["parts"]] == ["solar", "grid"] and ch2["bars"][4]["parts"][0]["cls"] == "grid"
+    assert energy._nice_max(14.4) == (15, 5) and energy._nice_max(579)[0] == 750
+
+    ch = energy.chart(s)
+    assert len(ch["bars"]) == 48 and ch["last"]["x"] == 100.0 and [l["text"] for l in ch["xlabels"]][:2] == ["00:00", "03:00"]
+
+
+def test_flow_recording_and_backfill(tmp_path):
+    import recorder
+    st = recorder.Store(tmp_path / "b.db")
+    fill_store(st, 1795000000, 1, step=60)                  # recorded before flows existed...
+    with st._conn() as c:
+        c.execute("DELETE FROM flows")
+    rec = recorder.Recorder(st, lambda: recorded_status(1795000000 + 3600))
+    rec.poll_once(now=1795000000 + 3600)                      # ...the next poll records a flow and backfills
+    n, home = st._conn().execute("SELECT COUNT(*), MIN(home) FROM flows").fetchone()
+    assert n == 61 and home == 4000 + -1500 - 50                 # grid + generation - eddi internal load
+    assert st.backfill_flows(recorded_status(1795000000)) == 0   # nothing left to fill
+
+
+def test_energy_page(tmp_path):
+    a = make_recorded_app(tmp_path, hours=6, step=60)
+    a.config["NOW"] = 1795000000 + 3 * 3600
+    c = a.test_client()
+    html = c.get("/energy").get_data(as_text=True)
+    assert "Home energy use" in html and "Running total" in html and "Per half hour" in html
+    # this data imports 4 kW against 4 kW of demand (home, hot water, battery charging): all from the grid
+    assert "From solar &amp; battery" in html and 'class="bar grid' in html and 'class="bar solar' not in html
+    assert 'class="on" aria-current="true">Day' in html and 'class="eplot cum"' in html
+    for p in ("week", "month", "year"):
+        assert c.get(f"/energy?period={p}").status_code == 200
+    assert c.get("/energy?period=bogus&date=nope").status_code == 200
+    assert "hasn't started yet" in c.get("/energy?period=year&date=2099-01-01").get_data(as_text=True)
+    assert "No readings were recorded" in c.get("/energy?period=day&date=2020-01-01").get_data(as_text=True)
+    assert 'href="/energy"' in c.get("/").get_data(as_text=True)          # the Overview's Home node links here
+
+
 if __name__ == "__main__":
     import tempfile
     for fn in (test_dashboard_and_api, test_upload_and_report, test_current_report_persists,
                test_ct_choice, test_ct_chart_builds_up, test_upload_rejects_bad_files, test_behind_proxy,
                test_login, test_login_secure_cookie_and_throttle, test_recorder_and_store,
                test_stored_report, test_stored_report_long_range_and_empty, test_live_chart_from_recorded_data,
-               test_stored_report_with_recording_gap, test_overview_page):
+               test_stored_report_with_recording_gap, test_overview_page, test_energy_buckets_and_totals,
+               test_flow_recording_and_backfill, test_energy_page):
         with tempfile.TemporaryDirectory() as d:
             fn(Path(d))
             print("ok", fn.__name__)

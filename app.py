@@ -4,8 +4,9 @@ import os
 import re
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pathlib import Path
 
 from flask import Flask, abort, jsonify, redirect, render_template, request, send_file, url_for
@@ -13,6 +14,7 @@ import io
 from urllib.parse import urlencode
 
 import charts
+import energy
 import flow
 import recorder
 from auth import init_auth
@@ -69,6 +71,7 @@ def create_app(test_config=None):
         RECORD=os.environ.get("RECORD", "1").lower() not in ("0", "false", "no"),
         POLL_SECONDS=int(os.environ.get("POLL_SECONDS", "15")),
         RETENTION_DAYS=int(os.environ.get("RETENTION_DAYS", "180")),
+        TIMEZONE=os.environ.get("TZ") or "Europe/London",    # day/week/month boundaries on the Energy page
     )
     if test_config:
         app.config.update(test_config)
@@ -207,6 +210,29 @@ def create_app(test_config=None):
             return render_template("_overview.html", **overview_context())
         except MyEnergiError as e:
             return render_template("_overview.html", flow=None, devices=[], error=str(e)), 502
+
+    @app.get("/energy")
+    def energy_page():
+        """Home energy use for a day (per half hour), week or month (per day) or year (per month)."""
+        try:
+            tz = ZoneInfo(app.config["TIMEZONE"])
+        except (ZoneInfoNotFoundError, ValueError):
+            tz = ZoneInfo("UTC")
+        now_ts = app.config.get("NOW") or time.time()
+        today = datetime.fromtimestamp(now_ts, tz).date()
+        period = request.args.get("period", "day")
+        if period not in energy.PERIODS:
+            period = "day"
+        try:
+            day = date.fromisoformat(request.args.get("date", ""))
+        except ValueError:
+            day = today
+        s = energy.summarise(store, period, day, tz, now_ts)
+        nav = {"prev": energy.shift(period, day, -1).isoformat(), "next": energy.shift(period, day, 1).isoformat(),
+               "today": today.isoformat(), "has_next": not s["in_progress"] and not s["future"],
+               "is_now": s["in_progress"]}
+        return render_template("energy.html", s=s, ch=energy.chart(s), nav=nav, day=day.isoformat(),
+                               tz_name=app.config["TIMEZONE"], periods=energy.PERIODS)
 
     @app.get("/live")
     def dashboard():
