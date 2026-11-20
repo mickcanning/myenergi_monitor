@@ -26,7 +26,7 @@
 <div class="energy-stats">
   <div class="stat">
     <span class="stat-label">{{ 'Used so far' if s.in_progress else 'Used' }}</span>
-    <span class="stat-value">{{ '%.1f' % s.total }} <small>kWh</small></span>
+    <span class="stat-value">{{ '%.1f' % s.total }} <small>kWh{% if s.total_err >= 0.05 %} ± {{ '%.1f' % s.total_err }}{% endif %}</small></span>
   </div>
   {% if s.self_pct is not none %}
   <div class="stat">
@@ -41,8 +41,8 @@
   </div>
   {% endif %}
   <div class="stat">
-    <span class="stat-label">Recorded</span>
-    <span class="stat-value small">{{ '%.0f' % (s.coverage * 100) }}% <small>of the time</small></span>
+    <span class="stat-label">Measured by the hub</span>
+    <span class="stat-value small">{{ '%.0f' % (s.measured * 100) }}% <small>of the time{% if s.coverage - s.measured > 0.005 %}, sampled {{ '%.0f' % ((s.coverage - s.measured) * 100) }}%{% endif %}</small></span>
   </div>
 </div>
 
@@ -56,6 +56,7 @@
     <svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
       {% for t in ch.cum_ticks %}<line class="grid" x1="0" x2="1000" y1="{{ t.y }}" y2="{{ t.y }}"/>{% endfor %}
       {% if ch.area %}<path class="cum-area" d="{{ ch.area }}"/>{% endif %}
+      {% if ch.band %}<path class="cum-range" d="{{ ch.band }}"/>{% endif %}
       <polyline class="cum-line" points="{{ ch.line }}"/>
       <line class="axis" x1="0" x2="1000" y1="100" y2="100"/>
     </svg>
@@ -73,6 +74,7 @@
     <svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
       {% for t in ch.bar_ticks %}<line class="grid" x1="0" x2="1000" y1="{{ t.y }}" y2="{{ t.y }}"/>{% endfor %}
       {% for b in ch.bars %}{% for p in b.parts %}<rect class="bar {{ p.cls }}{{ ' partial' if b.partial }}" x="{{ b.x }}" y="{{ p.y }}" width="{{ b.w }}" height="{{ p.h }}"/>{% endfor %}{% endfor %}
+      {% for b in ch.bars if b.err %}{% set e = b.err %}<path class="err" d="M{{ e.x }},{{ e.y1 }} V{{ e.y2 }} M{{ e.x - e.w / 2 }},{{ e.y1 }} H{{ e.x + e.w / 2 }} M{{ e.x - e.w / 2 }},{{ e.y2 }} H{{ e.x + e.w / 2 }}"/>{% endfor %}
       <line class="axis" x1="0" x2="1000" y1="100" y2="100"/>
     </svg>
     <div class="band" hidden></div>
@@ -80,24 +82,27 @@
   <div class="xaxis">{% for l in ch.xlabels %}<span {% if l.minor %}class="minor" {% endif %}style="left:{{ l.x }}%">{{ l.text }}</span>{% endfor %}</div>
   <div class="tip" hidden></div>
   <figcaption class="muted">
-    Home use is estimated from the CTs (grid + solar − hot water − car). Grid's share is the grid import as a
-    share of everything being powered at the time, including hot water, the car and battery charging.
-    {% if ch.partial %}Paler bars were only partly recorded.{% endif %}
+    Best estimate of home use: grid import and export, hot water and car come from the hub's own
+    minute-by-minute measurements; solar &amp; battery comes from our 15-second samples, with gaps filled by
+    interpolation. The shading and whiskers show an approximate 95% range for the sampled part.
+    {% if ch.partial %}Paler bars have data for only part of the time.{% endif %}
     Times are {{ tz_name }}.
   </figcaption>
 </figure>
 
 <details class="panel energy-table">
   <summary>Show as a table</summary>
-  <table>
-    <thead><tr><th>{{ s.bucket_word | capitalize }}</th><th class="num">kWh</th><th class="num">Solar &amp; battery</th><th class="num">Grid</th><th class="num">Running total</th><th class="num">Recorded</th></tr></thead>
+  <div class="table-scroll"><table>
+    <thead><tr><th>{{ s.bucket_word | capitalize }}</th><th class="num">Estimated kWh</th><th class="num">± (95%)</th><th class="num">Solar &amp; battery</th><th class="num">Grid</th><th class="num">Running total</th><th class="num">Sampled only</th><th class="num">Hub-measured</th></tr></thead>
     <tbody>
     {% for r in s.rows if r.kwh is not none %}
-      <tr><td>{{ r.long }}</td><td class="num">{{ '%.2f' % r.kwh }}</td><td class="num">{{ '%.2f' % r.solar }}</td><td class="num">{{ '%.2f' % r.grid }}</td><td class="num">{{ '%.2f' % r.cum }}</td>
-          <td class="num">{{ '%.0f%%' % (r.coverage * 100) }}</td></tr>
+      <tr><td>{{ r.long }}</td><td class="num">{{ '%.2f' % r.kwh }}</td><td class="num muted">{{ '%.2f' % r.err }}</td>
+          <td class="num">{{ '%.2f' % r.solar }}</td><td class="num">{{ '%.2f' % r.grid }}</td><td class="num">{{ '%.2f' % r.cum }}</td>
+          <td class="num">{{ '%.2f' % r.sampled }}</td><td class="num">{{ '%.0f%%' % (r.measured * 100) }}</td></tr>
     {% endfor %}
     </tbody>
-  </table>
+  </table></div>
+  <p class="muted">Totals: estimated {{ '%.2f' % s.total }} kWh (± {{ '%.2f' % s.total_err }}), sampled only {{ '%.2f' % s.total_sampled }} kWh.</p>
 </details>
 {% endif %}
 {% endif %}
@@ -116,11 +121,13 @@
       const d = data[i];
       bands.forEach((b) => { b.style.left = (i / n * 100) + "%"; b.style.width = (100 / n) + "%"; b.hidden = false; });
       tip.innerHTML = `<div class="muted">${d.l}</div>` + (d.k == null ? "<div>Not yet</div>" :
-        `<div>Used <b>${fmt(d.k)}</b></div>` +
+        `<div>Used <b>${fmt(d.k)}</b>${d.e >= 0.005 ? ` <span class="muted">± ${d.e.toFixed(2)}</span>` : ""}</div>` +
         `<div class="row-solar"><i></i>Solar &amp; battery <b>${fmt(d.s)}</b></div>` +
         `<div class="row-grid"><i></i>Grid <b>${fmt(d.g)}</b></div>` +
-        `<div class="muted">Running total ${fmt(d.c)}</div>` +
-        (d.p != null && d.p < 90 ? `<div class="muted">Recorded ${d.p}% of this ${word}</div>` : ""));
+        `<div class="muted">Running total ${fmt(d.c)}${d.ce >= 0.05 ? " ± " + d.ce.toFixed(1) : ""}</div>` +
+        `<div class="muted">Sampled only: ${fmt(d.m)}</div>` +
+        (d.p != null && d.p < 90 ? `<div class="muted">Data for ${d.p}% of this ${word}</div>` :
+         d.ms != null && d.ms < 90 ? `<div class="muted">Hub-measured for ${d.ms}% of this ${word}</div>` : ""));
       tip.hidden = false;
       const fr = fig.getBoundingClientRect();
       const cx = r.left - fr.left + (i + 0.5) / n * r.width;

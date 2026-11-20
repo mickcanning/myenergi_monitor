@@ -611,6 +611,74 @@ def test_energy_page(tmp_path):
     assert 'href="/energy"' in c.get("/").get_data(as_text=True)          # the Overview's Home node links here
 
 
+def test_estimate_combines_measured_and_sampled(tmp_path):
+    import estimate, recorder
+    st = recorder.Store(tmp_path / "est.db")
+    t0 = 1795000000 // 1800 * 1800
+    # samples: solar alternates 800/1200 W (mean 1 kW); the sampled home is 1.9 kW (it missed some spikes)
+    rows = [(t, 1400, 800 if (t // 15) % 2 else 1200, 500, 0, 1900) for t in range(t0, t0 + 3600, 15)
+            if not (t0 + 600 <= t < t0 + 900)]                       # a 5-minute polling gap
+    with st._conn() as c:
+        c.executemany("INSERT INTO flows VALUES (?, ?, ?, ?, ?, ?)", rows)
+    # the hub measured 1.5 kW import and 0.5 kW to the Eddi every minute of the first 50 minutes
+    st.save_minutes("2026-11-18", [(m, 1500 * 60, 0, 500 * 60) for m in range(t0, t0 + 3000, 60)], complete=False)
+    hh = estimate.compute(st, t0, t0 + 3600)
+    home, grid, var, covered, measured, sampled = hh[t0]
+    assert abs(home - 1.0) < 0.01                       # 1.5 kW + 1 kW solar - 0.5 kW Eddi = 2 kW for 30 min
+    assert abs(grid - 0.6) < 0.01                       # 1.5 kW of the 2.5 kW demand came from the grid
+    assert covered == measured == 1800                  # the polling gap is filled by interpolation
+    # sampled only: 1.9 kW for the ~25 minutes polled (the reading before the gap counts for up to 60 s)
+    assert 0 < estimate.ci95(var) < 0.05 and 1.9 * 25 / 60 < sampled < 1.9 * 26.5 / 60
+    home2, _, _, covered2, measured2, _ = hh[t0 + 1800]
+    assert covered2 == 1800 and measured2 == 1200       # last 10 minutes: no measured data yet -> samples
+    assert abs(home2 - (2.0 * 20 + 1.9 * 10) / 60) < 0.01
+    # no variation in the solar readings -> no sampling error
+    with st._conn() as c:
+        c.execute("UPDATE flows SET solar = 1000")
+    assert estimate.compute(st, t0, t0 + 1800)[t0][2] == 0
+    # final half hours are cached once their day's history is complete
+    st.save_minutes(_day(t0), [(m, 1500 * 60, 0, 500 * 60) for m in range(t0, t0 + 3600, 60)], complete=True)
+    with st._conn() as c:
+        c.execute("INSERT OR REPLACE INTO history_days VALUES (?, 0, 1)", (_day(t0),))
+    got = estimate.half_hours(st, t0, t0 + 3600, now=t0 + 86400 * 2)
+    assert set(st.cached_hh(t0, t0 + 3600)) == {t0, t0 + 1800} and abs(got[t0 + 1800][0] - 1.0) < 0.01
+
+
+def _day(ts):
+    from datetime import datetime as dt, timezone as tz
+    return dt.fromtimestamp(ts, tz.utc).strftime("%Y-%m-%d")
+
+
+def test_history_sync(tmp_path):
+    import recorder
+    st = recorder.Store(tmp_path / "h.db")
+    now = 1795000000
+    with st._conn() as c:
+        c.execute("INSERT INTO flows VALUES (?, 0, 0, 0, 0, 0)", (now - 2 * 86400,))   # recording began 2 days ago
+    calls = []
+
+    def history(kind, sno, day):
+        calls.append((kind, day))
+        from datetime import datetime as dt, timezone as tz
+        d0 = int(dt.strptime(day, "%Y-%m-%d").replace(tzinfo=tz.utc).timestamp())
+        if kind == "eddi":
+            return [(m, {"imp": 600, "exp": 60, "h1d": 120}) for m in range(d0, d0 + 86400 + 60, 60)]
+        return [(m, {"imp": 999, "h1b": 240}) for m in range(d0, d0 + 86400, 60)]
+
+    status = {"eddi": [{"sno": 1, "isVHubEnabled": True}], "zappi": [{"sno": 2}], "harvi": [{"sno": 3}]}
+    rec = recorder.Recorder(st, lambda: status, get_history=history)
+    days = rec.sync_history(status, now)
+    assert days == [_day(now), _day(now - 86400), _day(now - 2 * 86400)]           # newest first
+    assert {k for k, _ in calls} == {"eddi", "zappi"}
+    hist = st.history_days()
+    assert not hist[_day(now)][1] and hist[_day(now - 86400)][1]                     # today isn't complete
+    m = st.minutes(now - 86400, now - 86400 + 60)
+    assert list(m.values()) == [(600, 60, 360)]       # hub's import/export; Eddi + Zappi diverted/boosted
+    assert st._conn().execute("SELECT COUNT(*) FROM minutes").fetchone()[0] == 3 * 1440   # the 1441st minute is dropped
+    calls.clear()
+    assert rec.sync_history(status, now + 600) == [_day(now)] and len(calls) == 2   # only today again
+
+
 if __name__ == "__main__":
     import tempfile
     for fn in (test_dashboard_and_api, test_upload_and_report, test_current_report_persists,
@@ -618,7 +686,8 @@ if __name__ == "__main__":
                test_login, test_login_secure_cookie_and_throttle, test_recorder_and_store,
                test_stored_report, test_stored_report_long_range_and_empty, test_live_chart_from_recorded_data,
                test_stored_report_with_recording_gap, test_overview_page, test_energy_buckets_and_totals,
-               test_flow_recording_and_backfill, test_energy_page):
+               test_flow_recording_and_backfill, test_energy_page, test_estimate_combines_measured_and_sampled,
+               test_history_sync):
         with tempfile.TemporaryDirectory() as d:
             fn(Path(d))
             print("ok", fn.__name__)

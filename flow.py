@@ -71,6 +71,10 @@ def _records(status, kind):
     return [r for r in status.get(kind, []) or [] if isinstance(r, dict)]
 
 
+def is_hub_rec(r):
+    return str(r.get("isVHubEnabled", "")).lower() in ("true", "1")
+
+
 def _hub(status):
     for kind in ("eddi", "zappi", "libbi"):
         for r in _records(status, kind):

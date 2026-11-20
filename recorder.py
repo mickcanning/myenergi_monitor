@@ -8,7 +8,7 @@ import math
 import sqlite3
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import flow
 from charts import Log, Row
@@ -31,6 +31,21 @@ CREATE INDEX IF NOT EXISTS readings_device ON readings (device, sno, poll);
 CREATE TABLE IF NOT EXISTS flows (
     poll  INTEGER PRIMARY KEY,
     grid  REAL, solar REAL, eddi REAL, zappi REAL, home REAL
+);
+-- The hub's own per-minute energy history (joules, measured continuously rather than sampled):
+-- grid import/export, and what the Eddi and Zappi diverted or boosted.
+CREATE TABLE IF NOT EXISTS minutes (
+    ts INTEGER PRIMARY KEY,    -- minute start, unix seconds (UTC)
+    imp REAL, exp REAL, div REAL
+);
+-- Which UTC days of history have been fetched; complete = the day was over when it was fetched.
+CREATE TABLE IF NOT EXISTS history_days (
+    day TEXT PRIMARY KEY, fetched INTEGER, complete INTEGER
+);
+-- Finished half-hour home energy estimates (see estimate.py), so long ranges draw quickly.
+CREATE TABLE IF NOT EXISTS energy_hh (
+    hh INTEGER PRIMARY KEY,
+    home REAL, grid REAL, var REAL, covered REAL, measured REAL, sampled REAL
 );
 """
 
@@ -184,8 +199,52 @@ class Store:
                 self._conn().execute(q, (MAX_STEP_S, int(start_ts), int(end_ts) + MAX_STEP_S))
                 if hh < end_ts}
 
+    # -- measured minute history -------------------------------------------
+    def save_minutes(self, day, rows, complete, now=None):
+        """rows: [(minute ts, imp J, exp J, div J)] for one UTC day."""
+        with self._conn() as c:
+            c.executemany("INSERT OR REPLACE INTO minutes VALUES (?, ?, ?, ?)", rows)
+            c.execute("INSERT OR REPLACE INTO history_days VALUES (?, ?, ?)",
+                      (day, int(now or time.time()), 1 if complete else 0))
+            start = int(datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
+            c.execute("DELETE FROM energy_hh WHERE hh >= ? AND hh < ?", (start, start + 86400))
+
+    def history_days(self):
+        return {d: (f, bool(cp)) for d, f, cp in self._conn().execute("SELECT * FROM history_days")}
+
+    def minutes(self, start_ts, end_ts):
+        return {ts: (imp, exp, div) for ts, imp, exp, div in self._conn().execute(
+            "SELECT ts, imp, exp, div FROM minutes WHERE ts >= ? AND ts < ?", (int(start_ts), int(end_ts)))}
+
+    def complete_until(self):
+        """End (unix s) of the latest UTC day whose history is complete, or None."""
+        d = self._conn().execute("SELECT MAX(day) FROM history_days WHERE complete = 1").fetchone()[0]
+        return None if d is None else \
+            datetime.strptime(d, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp() + 86400
+
+    def flow_samples(self, start_ts, end_ts):
+        return self._conn().execute(
+            "SELECT poll, grid, solar, eddi, zappi, home FROM flows WHERE poll >= ? AND poll < ? ORDER BY poll",
+            (int(start_ts), int(end_ts))).fetchall()
+
+    def first_flow_poll(self):
+        return self._conn().execute("SELECT MIN(poll) FROM flows").fetchone()[0]
+
+    # -- cached half-hour estimates ------------------------------------------
+    def cached_hh(self, start_ts, end_ts):
+        return {r[0]: r[1:] for r in self._conn().execute(
+            "SELECT hh, home, grid, var, covered, measured, sampled FROM energy_hh WHERE hh >= ? AND hh < ?",
+            (int(start_ts), int(end_ts)))}
+
+    def cache_hh(self, rows):
+        with self._conn() as c:
+            c.executemany("INSERT OR REPLACE INTO energy_hh VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
+
     def prune(self, before_ts):
         with self._conn() as c:
+            c.execute("DELETE FROM minutes WHERE ts < ?", (int(before_ts),))
+            c.execute("DELETE FROM energy_hh WHERE hh < ?", (int(before_ts),))
+            c.execute("DELETE FROM history_days WHERE day < ?", (_utc(before_ts).strftime("%Y-%m-%d"),))
             c.execute("DELETE FROM flows WHERE poll < ?", (int(before_ts),))
             return c.execute("DELETE FROM readings WHERE poll < ?", (int(before_ts),)).rowcount
 
@@ -193,9 +252,13 @@ class Store:
 class Recorder(threading.Thread):
     """Polls every `interval` seconds for as long as the process runs."""
 
-    def __init__(self, store, get_status, interval=15, retention_days=180):
+    HISTORY_EVERY_S = 600          # fetch the hub's minute history this often
+    HISTORY_DAYS_PER_SYNC = 10     # at most this many days per sync, so a long backfill is spread out
+
+    def __init__(self, store, get_status, interval=15, retention_days=180, get_history=None):
         super().__init__(name="recorder", daemon=True)
-        self.store, self.get_status = store, get_status
+        self.store, self.get_status, self.get_history = store, get_status, get_history
+        self._last_history = 0.0
         self.interval, self.retention_s = max(5, interval), retention_days * 86400
         self.stop_event = threading.Event()
         self.last_ok = None          # unix time of the last successful poll
@@ -211,6 +274,12 @@ class Recorder(threading.Thread):
             self.store.insert(now, summarise(status, now=_utc(now)))
             self.store.insert_flow(now, flow.compute(status))
             self.last_ok, self.latest = now, (now, status)
+            if self.get_history and now - self._last_history >= self.HISTORY_EVERY_S:
+                self._last_history = now
+                try:
+                    self.sync_history(status, now)
+                except Exception as e:
+                    log.warning("recorder: history sync failed: %s", e)
             if not self._backfilled:                 # once per start: flows for polls recorded before they existed
                 self._backfilled = True
                 try:
@@ -228,6 +297,48 @@ class Recorder(threading.Thread):
                 self.store.prune(now - self.retention_s)
             except sqlite3.Error as e:
                 log.warning("recorder: prune failed: %s", e)
+
+    def sync_history(self, status, now=None):
+        """Fetch the hub's measured per-minute history for every UTC day since recording began that isn't
+        complete yet (today is refetched each sync). Returns the days fetched."""
+        if not self.get_history:
+            return []
+        now = now or time.time()
+        first = self.store.first_flow_poll()
+        if first is None:
+            return []
+        devices = [(kind, str(r["sno"]), flow.is_hub_rec(r)) for kind in ("eddi", "zappi")
+                   for r in status.get(kind, []) or [] if isinstance(r, dict) and "sno" in r]
+        if not devices:
+            return []
+        hub = next((d for d in devices if d[2]), devices[0])
+        known = self.store.history_days()
+        days, d = [], _utc(now).date()
+        while d >= _utc(max(first, now - self.retention_s)).date():
+            name = d.isoformat()
+            if not known.get(name, (0, False))[1]:
+                days.append(name)
+            d -= timedelta(days=1)
+        done = []
+        for day in days[:self.HISTORY_DAYS_PER_SYNC]:            # newest first
+            try:
+                per_min = {}
+                for kind, sno, _ in devices:
+                    for ts, f in self.get_history(kind, sno, day):
+                        m = per_min.setdefault(ts, [None, None, 0.0])
+                        if (kind, sno) == hub[:2]:
+                            m[0], m[1] = f.get("imp", 0), f.get("exp", 0)
+                        m[2] += sum(v for k, v in f.items() if len(k) == 3 and k[0] == "h" and k[1] in "123"
+                                    and k[2] in "db")
+            except Exception as e:                       # try again next sync
+                log.warning("recorder: history for %s failed: %s", day, e)
+                break
+            day_start = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp()
+            rows = [(ts, m[0], m[1], m[2]) for ts, m in per_min.items()
+                    if m[0] is not None and day_start <= ts < day_start + 86400]
+            self.store.save_minutes(day, rows, complete=now > day_start + 86400 + 1800, now=now)
+            done.append(day)
+        return done
 
     def run(self):
         log.info("recorder: polling every %s s into %s", self.interval, self.store.path)

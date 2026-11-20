@@ -206,3 +206,7 @@ button.secondary { background:var(--card); color:var(--ink); border:1px solid va
 .energy-table summary { cursor:pointer; color:var(--ink2); font-size:.9em; }
 @media (max-width: 560px) { .energy-chart .xaxis .minor { display:none; } }
 @media (max-width: 560px) { .energy-chart .legend { margin-left:0; flex-basis:100%; } }
+.eplot .cum-range { fill:var(--home); fill-opacity:.18; }
+.eplot .err { fill:none; stroke:var(--ink); stroke-opacity:.55; stroke-width:1.2; vector-effect:non-scaling-stroke; }
+.table-scroll { overflow-x:auto; }
+.energy-table td.muted { font-size:inherit; }

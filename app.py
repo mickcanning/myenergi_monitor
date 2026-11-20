@@ -107,7 +107,8 @@ def create_app(test_config=None):
     rec = None
     if app.config["RECORD"] and app.config["HUB_SERIAL"] and app.config["API_KEY"] and not app.config.get("TESTING"):
         rec = app.extensions["recorder"] = recorder.Recorder(
-            store, lambda: get_client().status(), app.config["POLL_SECONDS"], app.config["RETENTION_DAYS"])
+            store, lambda: get_client().status(), app.config["POLL_SECONDS"], app.config["RETENTION_DAYS"],
+            get_history=lambda kind, sno, day: get_client().day_history(kind, sno, day))
         rec.start()
 
     # ---- live values -------------------------------------------------------

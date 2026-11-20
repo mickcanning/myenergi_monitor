@@ -10,6 +10,8 @@ from bisect import bisect_right
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+import estimate
+
 PERIODS = ("day", "week", "month", "year")
 BUCKET_WORD = {"day": "half hour", "week": "day", "month": "day", "year": "month"}
 
@@ -83,43 +85,54 @@ def buckets(period, start, end, tz):
 
 
 def summarise(store, period, day, tz, now_ts):
-    """Per-bucket and cumulative kWh for the period containing `day`."""
+    """Per-bucket and cumulative kWh for the period containing `day`: the best estimate (estimate.py), its
+    approximate 95% range, and the plain sampled figure for comparison."""
     start, end, title = period_bounds(period, day, tz)
     bks = buckets(period, start, end, tz)
     lo, hi = bks[0][0], bks[-1][1]
-    halves = store.energy_by_half_hour(lo, min(hi, now_ts + 1800))
+    halves = estimate.half_hours(store, lo, min(hi, now_ts + 1800), now_ts)
     starts = [b[0] for b in bks]
-    kwh = [0.0] * len(bks)
-    from_grid = [0.0] * len(bks)
-    covered = [0.0] * len(bks)
-    for hh, (e, g, cov) in halves.items():
+    n = len(bks)
+    kwh, from_grid, var, covered, measured, sampled = ([0.0] * n for _ in range(6))
+    for hh, (e, g, v, cov, meas, smp) in halves.items():
         i = bisect_right(starts, hh) - 1
-        if 0 <= i < len(bks):
+        if 0 <= i < n:
             kwh[i] += e or 0
             from_grid[i] += g or 0
+            var[i] += v or 0
             covered[i] += cov or 0
-    rows, total, total_grid = [], 0.0, 0.0
-    for (a, b, short, long), e, g, cov in zip(bks, kwh, from_grid, covered):
+            measured[i] += meas or 0
+            sampled[i] += smp or 0
+    rows, total, total_grid, total_var, total_sampled = [], 0.0, 0.0, 0.0, 0.0
+    for k, (a, b, short, long) in enumerate(bks):
+        e, g = kwh[k], min(max(from_grid[k], 0.0), max(kwh[k], 0.0))
         future = a >= now_ts
         span = max(1.0, min(b, now_ts) - a)                       # only the part of the bucket that has happened
-        coverage = None if future else min(1.0, cov / span)
-        g = min(max(g, 0.0), max(e, 0.0))
         if not future:
             total += e
             total_grid += g
+            total_var += var[k]
+            total_sampled += sampled[k]
         rows.append({"start": a, "end": b, "label": short, "long": long, "kwh": None if future else e,
                      "grid": None if future else g, "solar": None if future else max(e - g, 0.0),
-                     "cum": None if future else total, "coverage": coverage,
+                     "err": None if future else estimate.ci95(var[k]),
+                     "sampled": None if future else sampled[k],
+                     "cum": None if future else total, "cum_err": None if future else estimate.ci95(total_var),
+                     "coverage": None if future else min(1.0, covered[k] / span),
+                     "measured": None if future else min(1.0, measured[k] / span),
                      "current": a <= now_ts < b})
     past = [r for r in rows if r["kwh"] is not None]
-    seen = sum(r["coverage"] * (min(r["end"], now_ts) - r["start"]) for r in past)
-    span = sum(min(r["end"], now_ts) - r["start"] for r in past)
+    spans = [min(r["end"], now_ts) - r["start"] for r in past]
+    span = sum(spans)
     busiest = max(past, key=lambda r: r["kwh"]) if past and max(r["kwh"] for r in past) > 0 else None
     self_pct = round(100 * (1 - total_grid / total)) if total > 0.005 else None
     return {"period": period, "title": title, "start": start, "end": end, "rows": rows, "total": total,
+            "total_err": estimate.ci95(total_var), "total_sampled": total_sampled,
             "total_grid": total_grid, "total_solar": max(total - total_grid, 0.0), "self_pct": self_pct,
-            "coverage": (seen / span) if span else 0.0, "busiest": busiest,
-            "in_progress": lo <= now_ts < hi, "future": lo > now_ts, "bucket_word": BUCKET_WORD[period]}
+            "coverage": sum(r["coverage"] * w for r, w in zip(past, spans)) / span if span else 0.0,
+            "measured": sum(r["measured"] * w for r, w in zip(past, spans)) / span if span else 0.0,
+            "busiest": busiest, "in_progress": lo <= now_ts < hi, "future": lo > now_ts,
+            "bucket_word": BUCKET_WORD[period]}
 
 
 def _nice_max(v):
@@ -146,8 +159,8 @@ def chart(s):
     n = len(rows)
     col = 1000 / n
 
-    cum_max, cum_step = _nice_max(max([r["cum"] or 0 for r in rows] + [0]))
-    bar_max, bar_step = _nice_max(max([r["kwh"] or 0 for r in rows] + [0]))
+    cum_max, cum_step = _nice_max(max([(r["cum"] or 0) + (r["cum_err"] or 0) for r in rows] + [0]))
+    bar_max, bar_step = _nice_max(max([(r["kwh"] or 0) + (r["err"] or 0) for r in rows] + [0]))
 
     def y(v, mx):
         return round(100 - v / mx * 100, 2)
@@ -159,6 +172,16 @@ def chart(s):
         pts.append((round((i + 1) * col, 2), y(r["cum"], cum_max)))
     line = " ".join(f"{x},{yy}" for x, yy in pts)
     area = ("M0,100 L" + " L".join(f"{x},{yy}" for x, yy in pts) + f" L{pts[-1][0]},100 Z") if len(pts) > 1 else ""
+    # likely range of the running total (approximate 95%), as a band around the line
+    upper, lower = [(0, 100)], [(0, 100)]
+    for i, r in enumerate(rows):
+        if r["cum"] is None:
+            break
+        x = round((i + 1) * col, 2)
+        upper.append((x, y(r["cum"] + r["cum_err"], cum_max)))
+        lower.append((x, y(max(r["cum"] - r["cum_err"], 0), cum_max)))
+    band = ("M" + " L".join(f"{x},{yy}" for x, yy in upper) + " L" +
+            " L".join(f"{x},{yy}" for x, yy in reversed(lower)) + " Z") if len(upper) > 1 else ""
 
     pad = min(col * 0.14, 6)             # a small surface gap between neighbouring bars
     seam = 1.6                           # and between the two parts of a bar (about 2px at panel height)
@@ -175,7 +198,11 @@ def chart(s):
         if r["grid"] > 0 and y_solar - y_top >= 1:           # skip slivers too thin to see
             bottom = y_solar - (seam if parts and y_solar - y_top > seam * 2 else 0)
             parts.append({"cls": "grid", "y": y_top, "h": round(bottom - y_top, 2)})
-        bars.append({"x": x, "w": w, "partial": partial, "parts": parts})
+        err = None
+        if r["err"] and (y(r["kwh"] - r["err"], bar_max) - y(r["kwh"] + r["err"], bar_max)) >= 2:
+            err = {"x": round(i * col + col / 2, 2), "y1": y(r["kwh"] + r["err"], bar_max),
+                   "y2": y(max(r["kwh"] - r["err"], 0), bar_max), "w": round(min(col * 0.3, 12), 2)}
+        bars.append({"x": x, "w": w, "partial": partial, "parts": parts, "err": err})
 
     xlabels = []
     for i, r in enumerate(rows):
@@ -197,11 +224,15 @@ def chart(s):
         return out
 
     last = pts[-1] if len(pts) > 1 else None
-    return {"line": line, "area": area, "bars": bars, "xlabels": xlabels, "n": n,
+    return {"line": line, "area": area, "band": band, "bars": bars, "xlabels": xlabels, "n": n,
             "cum_ticks": ticks(cum_max, cum_step), "bar_ticks": ticks(bar_max, bar_step),
             "last": {"x": last[0] / 10, "y": last[1]} if last else None,
             "partial": any(b["partial"] for b in bars),
             "hover": [{"l": r["long"], "k": None if r["kwh"] is None else round(r["kwh"], 3),
+                       "e": None if r["err"] is None else round(r["err"], 3),
+                       "m": None if r["sampled"] is None else round(r["sampled"], 3),
+                       "ce": None if r["cum_err"] is None else round(r["cum_err"], 3),
+                       "ms": None if r["measured"] is None else round(r["measured"] * 100),
                        "s": None if r["solar"] is None else round(r["solar"], 3),
                        "g": None if r["grid"] is None else round(r["grid"], 3),
                        "c": None if r["cum"] is None else round(r["cum"], 3),

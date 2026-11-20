@@ -10,6 +10,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 
 DIRECTOR = "director.myenergi.net"
 # The director sometimes answers "undefined" in its server header; only trust real myenergi hostnames.
@@ -107,3 +108,25 @@ class MyEnergiClient:
                         out[key] = value
             self._cache = (now, out)
             return out
+
+    HISTORY_LETTERS = {"eddi": "E", "zappi": "Z"}
+
+    def day_history(self, kind, sno, day):
+        """The device's per-minute energy for one UTC day (`day` = 'YYYY-MM-DD'), as
+        [(unix minute start, {field: joules})]. Fields include imp/exp (grid import/export, measured by the hub's
+        grid CT) and h1d/h1b... (energy the device diverted or boosted). Measured continuously, not sampled."""
+        letter = self.HISTORY_LETTERS.get(kind)
+        if not letter or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+            raise MyEnergiError(f"No history for {kind}.")
+        data = self._get_json(f"/cgi-jday-{letter}{sno}-{day}")
+        recs = next(iter(data.values()), []) if isinstance(data, dict) else data
+        out = []
+        for r in recs if isinstance(recs, list) else []:
+            try:
+                ts = datetime(int(r["yr"]), int(r["mon"]), int(r["dom"]), int(r.get("hr", 0)), int(r.get("min", 0)),
+                              tzinfo=timezone.utc).timestamp()
+            except (KeyError, TypeError, ValueError):
+                continue
+            out.append((int(ts), {k: v for k, v in r.items() if isinstance(v, (int, float)) and
+                                  k not in ("yr", "mon", "dom", "hr", "min", "v1", "frq")}))
+        return out
