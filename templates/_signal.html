@@ -1,0 +1,154 @@
+<section id="signal" class="signal">
+  <h2>Signal quality</h2>
+  <p class="muted">
+    How well the Eddi hears each Harvi. A Harvi powers itself from the current through its clamp, so it is only
+    counted while it had at least {{ signal.powered_w }} W to work with: quiet spells with no current are normal
+    and don't count against the signal. For the grid Harvi that's judged from the hub's own measurements.
+  </p>
+
+  <div class="sig-cards">
+    {% for h in signal.headline %}
+    <div class="sig-card h{{ loop.index0 }}">
+      <div class="sig-name"><i></i>{{ names.get(h.sno) or h.sno }}{% if h.sno|string == params.grid_sno|string %} <span class="badge fresh">grid</span>{% endif %}</div>
+      {% if h.rate is not none %}
+      <div class="sig-big">{{ '%.2f' % h.rate }}<small>reports per powered minute</small></div>
+      <div class="sig-sub">
+        {% if h.median %}A report every <b>{{ '%.0f' % h.median }} s</b> typically, <b>{{ '%.0f' % h.p95 }} s</b> at worst (95%) · {% endif %}
+        <b>{{ '%.0f' % (h.hit * 100) }}%</b> of powered minutes had one ·
+        <b>{{ h.silences }}</b> silence{{ 's' if h.silences != 1 }} of {{ signal.silence_s }} s+
+        {% if h.silence_rate is not none %}(<b>{{ '%.2f' % h.silence_rate }}</b> per powered hour){% endif %}
+      </div>
+      <div class="muted sig-sub">Powered for {{ '%.1f' % h.powered_h }} h of the selected range</div>
+      {% else %}
+      <div class="muted">No powered time in the selected range.</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  {% set t = signal.trend %}
+  <figure class="sig-chart energy-chart" data-hover='{{ t.hover | tojson }}'>
+    <div class="panel-title">Reports per powered minute, per day <span class="muted">higher is better</span>
+      <span class="legend">{% for sno in signal.snos %}<span><i class="h{{ loop.index0 }}"></i>{{ names.get(sno) or sno }}</span>{% endfor %}</span>
+    </div>
+    <div class="eplot sig">
+      {% for tk in t.hit_ticks %}<span class="ytick" style="top:{{ tk.y }}%">{{ tk.text }}</span>{% endfor %}
+      <svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
+        {% for tk in t.hit_ticks %}<line class="grid" x1="0" x2="1000" y1="{{ tk.y }}" y2="{{ tk.y }}"/>{% endfor %}
+        {% for sr in t.hit %}{% for sg in sr.segs %}<polyline class="sig-line h{{ sr.k }}" points="{{ sg }}"/>{% endfor %}{% endfor %}
+        <line class="axis" x1="0" x2="1000" y1="100" y2="100"/>
+      </svg>
+      {% for sr in t.hit %}{% for d in sr.dots %}<i class="sig-dot h{{ sr.k }}" style="left:{{ d.x }}%; top:{{ d.y }}%"></i>{% endfor %}{% endfor %}
+      {% for m in t.marks %}<span class="sig-mark" style="left:{{ m.x }}%" title="{{ m.when }}: {{ m.note }}"><span>{{ m.note }}</span></span>{% endfor %}
+      <div class="band" hidden></div>
+    </div>
+    <div class="panel-title">Silences of {{ signal.silence_s }} s+ while powered <span class="muted">per powered hour · lower is better</span></div>
+    <div class="eplot sig small">
+      {% for tk in t.rate_ticks %}<span class="ytick" style="top:{{ tk.y }}%">{{ tk.text }}</span>{% endfor %}
+      <svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
+        {% for tk in t.rate_ticks %}<line class="grid" x1="0" x2="1000" y1="{{ tk.y }}" y2="{{ tk.y }}"/>{% endfor %}
+        {% for sr in t.rate %}{% for sg in sr.segs %}<polyline class="sig-line h{{ sr.k }}" points="{{ sg }}"/>{% endfor %}{% endfor %}
+        <line class="axis" x1="0" x2="1000" y1="100" y2="100"/>
+      </svg>
+      {% for sr in t.rate %}{% for d in sr.dots %}<i class="sig-dot h{{ sr.k }}" style="left:{{ d.x }}%; top:{{ d.y }}%"></i>{% endfor %}{% endfor %}
+      {% for m in t.marks %}<span class="sig-mark" style="left:{{ m.x }}%"></span>{% endfor %}
+      <div class="band" hidden></div>
+    </div>
+    <div class="xaxis">{% for l in t.xlabels %}<span style="left:{{ l.x }}%">{{ l.text }}</span>{% endfor %}</div>
+    <div class="tip" hidden></div>
+    <figcaption class="muted">Dashed lines mark changes from the log below. Days with no powered time are left blank.</figcaption>
+  </figure>
+
+  <h3>Changes</h3>
+  <p class="muted">Note each change you make (a new antenna, moving it, a new cable) at the time you made it.
+    Each one gets a before/after comparison of up to a week either side, skipping half an hour around the change.</p>
+  <form method="post" action="{{ url_for('add_change', **request.args) }}" class="controls change-form">
+    <label>When ({{ signal.tz }}) <input type="datetime-local" name="when" value="{{ signal.now_local }}" required></label>
+    <label class="grow">What changed <input type="text" name="note" maxlength="200" placeholder="e.g. Larger antenna fitted to the Eddi" required></label>
+    <button type="submit">Add</button>
+  </form>
+
+  {% for c in signal.changes | reverse %}
+  <div class="change">
+    <div class="change-head">
+      <span><b>{{ c.when.strftime('%a %-d %b %Y, %H:%M') }}</b> · {{ c.note }}</span>
+      <form method="post" action="{{ url_for('delete_change', change_id=c.id, **request.args) }}" onsubmit="return confirm('Delete this change?')">
+        <button type="submit" class="secondary small-btn">Delete</button>
+      </form>
+    </div>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Harvi</th><th class="num">Reports/min before</th><th class="num">After</th><th class="num">Change (95%)</th>
+        <th class="num">Silences / powered h</th><th class="num">Longest gaps (95%)</th><th>Verdict</th></tr></thead>
+      <tbody>
+      {% for r in c.rows %}
+        <tr>
+          <td><i class="sig-key h{{ loop.index0 }}"></i>{{ names.get(r.sno) or r.sno }}</td>
+          <td class="num">{{ '%.2f' % r.before.rate if r.before.rate is not none else '–' }} <span class="muted">{{ r.hours_before }} h</span></td>
+          <td class="num">{{ '%.2f' % r.after.rate if r.after.rate is not none else '–' }} <span class="muted">{{ r.hours_after }} h</span></td>
+          <td class="num">{% if r.rate_pct %}{{ '%+.0f' % r.rate_pct[0] }}% ± {{ '%.0f' % r.rate_pct[1] }}%{% else %}–{% endif %}</td>
+          <td class="num">{{ '%.2f' % r.before.silence_rate if r.before.silence_rate is not none else '–' }} → {{ '%.2f' % r.after.silence_rate if r.after.silence_rate is not none else '–' }}</td>
+          <td class="num">{{ '%.0f s' % r.before.p95 if r.before.p95 else '–' }} → {{ '%.0f s' % r.after.p95 if r.after.p95 else '–' }}</td>
+          <td><span class="verdict {{ r.tone }}">{{ r.verdict }}</span></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+    <p class="muted small-note">Before: {{ c.before[0].strftime('%-d %b %H:%M') }} – {{ c.before[1].strftime('%-d %b %H:%M') }} ·
+      after: {{ c.after[0].strftime('%-d %b %H:%M') }} – {{ c.after[1].strftime('%-d %b %H:%M') }}.
+      The change is the difference in the average hourly report rate, with an approximate 95% range; a verdict
+      needs that range to be clear of zero. Hours count when the Harvi was powered for at least 10 minutes.</p>
+  </div>
+  {% else %}
+  <p class="muted">No changes logged yet.</p>
+  {% endfor %}
+
+  <h3>Interference check <span class="muted">(selected range)</span></h3>
+  <p class="muted">Reports per powered minute while the immersion heater or the car charger was drawing power,
+    against minutes when neither was. If the heater or the charger interferes with the radio, fewer reports get
+    through while it's on.</p>
+  <div class="table-scroll"><table>
+    <thead><tr><th>Harvi</th><th>While…</th><th class="num">Reports/min while on</th><th class="num">While both off</th><th>Reading</th></tr></thead>
+    <tbody>
+    {% for h in signal.interference %}{% set hi = loop.index0 %}{% for r in h.rows %}
+      <tr>
+        <td>{% if loop.first %}<i class="sig-key h{{ hi }}"></i>{{ names.get(h.sno) or h.sno }}{% endif %}</td>
+        <td>{{ r.label }}</td>
+        {% if r.on is none %}
+        <td class="num">–</td><td class="num">–</td><td class="muted">Didn't happen while powered in this range</td>
+        {% else %}
+        <td class="num">{{ '%.2f' % r.on }} <span class="muted">{{ '%.1f' % (r.on_p / 60) }} h</span></td>
+        <td class="num">{{ '%.2f' % r.off if r.off is not none else '–' }} <span class="muted">{{ '%.1f' % (r.off_p / 60) }} h</span></td>
+        <td>{{ r.verdict }}</td>
+        {% endif %}
+      </tr>
+    {% endfor %}{% endfor %}
+    </tbody>
+  </table></div>
+</section>
+
+<script>
+  (function () {
+    const fig = document.querySelector(".sig-chart");
+    if (!fig) return;
+    const data = JSON.parse(fig.dataset.hover), n = data.length;
+    const labels = {{ (signal.snos | map('string') | list) | tojson }}.map((s) => ({{ names | tojson }})[s] || s);
+    const plots = fig.querySelectorAll(".eplot"), bands = fig.querySelectorAll(".band"), tip = fig.querySelector(".tip");
+    function show(e) {
+      const r = plots[0].getBoundingClientRect();
+      const i = Math.max(0, Math.min(n - 1, Math.floor((e.clientX - r.left) / r.width * n)));
+      const d = data[i];
+      bands.forEach((b) => { b.style.left = (i / n * 100) + "%"; b.style.width = (100 / n) + "%"; b.hidden = false; });
+      tip.innerHTML = `<div class="muted">${d.d}</div>` + d.v.map((v, k) =>
+        `<div class="row-h${k}"><i></i>${labels[k]} <b>${v.rep == null ? "–" : v.rep.toFixed(2) + "/min"}</b>` +
+        (v.rate == null ? "" : ` · ${v.rate.toFixed(2)} silences/h`) +
+        (v.med == null ? "" : ` · every ${Math.round(v.med)} s`) + ` <span class="muted">${v.ph} h powered</span></div>`).join("");
+      tip.hidden = false;
+      const fr = fig.getBoundingClientRect();
+      const cx = r.left - fr.left + (i + 0.5) / n * r.width;
+      tip.style.left = Math.max(4, Math.min(fr.width - tip.offsetWidth - 4, cx - tip.offsetWidth / 2)) + "px";
+    }
+    function hide() { bands.forEach((b) => b.hidden = true); tip.hidden = true; }
+    plots.forEach((p) => { p.addEventListener("pointermove", show); p.addEventListener("pointerdown", show); });
+    fig.addEventListener("pointerleave", hide);
+  })();
+</script>

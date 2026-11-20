@@ -247,3 +247,37 @@ button.secondary { background:var(--card); color:var(--ink); border:1px solid va
 .energy-chart .legend > span { white-space:nowrap; }
 .energy-chart .legend { flex-wrap:wrap; }
 .eplot .cum-end { background:var(--ink); }
+/* Harvi signal quality. Harvi colours: grid Harvi orange, the next aqua (validated adjacent pair). */
+.signal { --h0:#eb6834; --h1:#1baf7a; --h2:#2a78d6; }
+:root[data-theme="dark"] .signal { --h0:#d95926; --h1:#199e70; --h2:#3987e5; }
+.signal h3 { font-size:1rem; margin:1.4rem 0 .3rem; }
+.sig-cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:.8rem; margin:.8rem 0 1rem; }
+.sig-card { border:1px solid var(--line); border-radius:8px; background:var(--card); padding:.7rem .9rem; }
+.sig-name { font-weight:600; margin-bottom:.2rem; }
+.sig-name i, .sig-key { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:.4rem; }
+.sig-card.h0 .sig-name i, .sig-key.h0 { background:var(--h0); }
+.sig-card.h1 .sig-name i, .sig-key.h1 { background:var(--h1); }
+.sig-card.h2 .sig-name i, .sig-key.h2 { background:var(--h2); }
+.sig-big { font-size:1.8rem; font-weight:650; font-variant-numeric:tabular-nums; line-height:1.2; }
+.sig-big small { font-size:.45em; font-weight:500; color:var(--ink2); margin-left:.35rem; }
+.sig-sub { font-size:.85em; margin-top:.2rem; }
+.sig-sub b { font-variant-numeric:tabular-nums; }
+.eplot.sig { height:160px; margin-bottom:1.1rem; }
+.eplot.sig.small { height:100px; margin-bottom:0; }
+.eplot .sig-line { fill:none; stroke-width:2; vector-effect:non-scaling-stroke; stroke-linejoin:round; }
+.eplot .sig-line.h0 { stroke:var(--h0); } .eplot .sig-line.h1 { stroke:var(--h1); } .eplot .sig-line.h2 { stroke:var(--h2); }
+.eplot .sig-dot { position:absolute; width:8px; height:8px; margin:-4px 0 0 -4px; border-radius:50%; box-shadow:0 0 0 2px var(--card); pointer-events:none; }
+.eplot .sig-dot.h0 { background:var(--h0); } .eplot .sig-dot.h1 { background:var(--h1); } .eplot .sig-dot.h2 { background:var(--h2); }
+.signal .legend i.h0, .signal .row-h0 i { background:var(--h0); }
+.signal .legend i.h1, .signal .row-h1 i { background:var(--h1); }
+.signal .legend i.h2, .signal .row-h2 i { background:var(--h2); }
+.sig-mark { position:absolute; top:0; bottom:0; border-left:1.5px dashed var(--ink2); pointer-events:auto; }
+.sig-mark span { position:absolute; top:2px; left:4px; font-size:.7rem; color:var(--ink2); white-space:nowrap; background:var(--card); padding:0 .2rem; border-radius:3px; }
+.change-form .grow { flex:1 1 16rem; }
+.change-form .grow input { width:100%; }
+.change { border:1px solid var(--line); border-radius:8px; background:var(--card); padding:.6rem .8rem; margin:.6rem 0; }
+.change-head { display:flex; justify-content:space-between; align-items:center; gap:1rem; margin-bottom:.3rem; }
+.change-head form { margin:0; }
+.small-btn { padding:.15rem .6rem; font-size:.8em; }
+.verdict { font-weight:600; }
+.verdict.good { color:var(--good); } .verdict.bad { color:var(--bad); } .verdict.none { color:var(--ink2); font-weight:500; }

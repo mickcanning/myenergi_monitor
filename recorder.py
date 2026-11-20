@@ -46,6 +46,14 @@ CREATE TABLE IF NOT EXISTS history_days (
 );
 -- Finished half-hour home energy estimates (see estimate.FIELDS), so long ranges draw quickly. It's only a
 -- cache: when its columns change it gets a new name and the old one is dropped.
+-- Hourly Harvi signal-quality counts (see harvi_signal.py), cached once their hour is final.
+CREATE TABLE IF NOT EXISTS signal_hours (
+    hour INTEGER, sno TEXT, grid TEXT, data TEXT, PRIMARY KEY (hour, sno, grid)
+);
+-- Things changed to improve the Harvi signal (e.g. "new antenna"), for before/after comparisons.
+CREATE TABLE IF NOT EXISTS changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, note TEXT NOT NULL
+);
 DROP TABLE IF EXISTS energy_hh;
 DROP TABLE IF EXISTS energy_hh2;
 CREATE TABLE IF NOT EXISTS energy_hh3 (
@@ -222,6 +230,19 @@ class Store:
                 c.execute("DELETE FROM energy_hh3")              # recompute the energy figures
         return fixed
 
+    # -- change log -------------------------------------------------------------
+    def changes(self):
+        return [{"id": i, "ts": ts, "note": note} for i, ts, note in
+                self._conn().execute("SELECT id, ts, note FROM changes ORDER BY ts")]
+
+    def add_change(self, ts, note):
+        with self._conn() as c:
+            c.execute("INSERT INTO changes (ts, note) VALUES (?, ?)", (int(ts), note))
+
+    def delete_change(self, change_id):
+        with self._conn() as c:
+            c.execute("DELETE FROM changes WHERE id = ?", (int(change_id),))
+
     def energy_by_half_hour(self, start_ts, end_ts):
         """{half-hour start (unix s): (home kWh, of which from the grid kWh, seconds covered)} for [start, end).
 
@@ -255,6 +276,7 @@ class Store:
                       (day, int(now or time.time()), 1 if complete else 0))
             start = int(datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
             c.execute("DELETE FROM energy_hh3 WHERE hh >= ? AND hh < ?", (start, start + 86400))
+            c.execute("DELETE FROM signal_hours WHERE hour >= ? AND hour < ?", (start, start + 86400))
 
     def history_days(self):
         return {d: (f, bool(cp)) for d, f, cp in self._conn().execute("SELECT * FROM history_days")}
@@ -292,6 +314,7 @@ class Store:
         with self._conn() as c:
             c.execute("DELETE FROM minutes WHERE ts < ?", (int(before_ts),))
             c.execute("DELETE FROM energy_hh3 WHERE hh < ?", (int(before_ts),))
+            c.execute("DELETE FROM signal_hours WHERE hour < ?", (int(before_ts),))
             c.execute("DELETE FROM history_days WHERE day < ?", (_utc(before_ts).strftime("%Y-%m-%d"),))
             c.execute("DELETE FROM flows WHERE poll < ?", (int(before_ts),))
             return c.execute("DELETE FROM readings WHERE poll < ?", (int(before_ts),)).rowcount

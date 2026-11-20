@@ -15,6 +15,7 @@ from urllib.parse import urlencode
 
 import charts
 import energy
+import harvi_signal
 import flow
 import recorder
 from auth import init_auth
@@ -442,8 +443,131 @@ def create_app(test_config=None):
         query = urlencode({**request.args.to_dict(), "from": r["from_s"], "to": r["to_s"]})
         return render_template("report.html", source="stored", png_url=url_for("stored_report_png"),
                                rng=r, recording=status, log=lg, params=params,
+                               signal=signal_context(r, params["grid_sno"]),
                                stats=charts.analyse(lg, **params), serials=lg.serials("harvi"),
                                names=app.config["HARVI_NAMES"], query=query)
+
+    # ---- Harvi signal quality -----------------------------------------------
+    SIGNAL_DAYS = 60
+    CHANGE_WINDOW_S = 7 * 86400     # compare up to a week either side of a change
+    CHANGE_SETTLE_S = 1800          # ignore half an hour around a change (fitting it interrupts the signal)
+
+    def local_tz():
+        try:
+            return ZoneInfo(app.config["TIMEZONE"])
+        except (ZoneInfoNotFoundError, ValueError):
+            return ZoneInfo("UTC")
+
+    def signal_context(r, grid_sno):
+        tz, now = local_tz(), app.config.get("NOW") or time.time()
+        span = store.span()
+        first_day = max(datetime.fromtimestamp(span[0], tz).date(),
+                        datetime.fromtimestamp(now, tz).date() - timedelta(days=SIGNAL_DAYS - 1))
+        start = datetime.combine(first_day, datetime.min.time(), tz).timestamp()
+        hourly = harvi_signal.hours(store, start, now, grid_sno, now)
+        snos = sorted({sno for per in hourly.values() for sno in per},
+                      key=lambda x: (str(x) != str(grid_sno), str(x)))
+        if not snos:
+            return None
+        hour_list = sorted(hourly)
+
+        def hours_in(a, b):
+            return [h for h in hour_list if a <= h and h + 3600 <= b]
+
+        # the selected range
+        lo, hi = r["start"].timestamp(), r["end"].timestamp()
+        in_range = [h for h in hour_list if lo <= h < hi]
+        headline = [{"sno": sno, **harvi_signal.summary(harvi_signal._sum(hourly, sno, in_range))} for sno in snos]
+
+        # daily trend
+        days, d, today = [], first_day, datetime.fromtimestamp(now, tz).date()
+        while d <= today:
+            a = datetime.combine(d, datetime.min.time(), tz).timestamp()
+            b = datetime.combine(d + timedelta(days=1), datetime.min.time(), tz).timestamp()
+            hs = [h for h in hour_list if a <= h < b]
+            days.append({"date": d, "a": a, "b": b,
+                         "per": {sno: harvi_signal.summary(harvi_signal._sum(hourly, sno, hs)) for sno in snos}})
+            d += timedelta(days=1)
+        changes = store.changes()
+        trend = harvi_signal_chart(days, snos, changes, tz)
+
+        # before / after each change
+        comparisons = []
+        for i, ch in enumerate(changes):
+            prev_ts = changes[i - 1]["ts"] if i else 0
+            next_ts = changes[i + 1]["ts"] if i + 1 < len(changes) else now
+            b0, b1 = max(prev_ts, ch["ts"] - CHANGE_WINDOW_S, start), ch["ts"] - CHANGE_SETTLE_S
+            a0, a1 = ch["ts"] + CHANGE_SETTLE_S, min(next_ts, ch["ts"] + CHANGE_WINDOW_S, now)
+            comparisons.append({**ch, "when": datetime.fromtimestamp(ch["ts"], tz),
+                                "before": (datetime.fromtimestamp(b0, tz), datetime.fromtimestamp(b1, tz)),
+                                "after": (datetime.fromtimestamp(a0, tz), datetime.fromtimestamp(max(a0, a1), tz)),
+                                "rows": harvi_signal.compare(hourly, snos, hours_in(b0, b1), hours_in(a0, a1))})
+        return {"snos": snos, "headline": headline, "days": days, "trend": trend, "changes": comparisons,
+                "interference": harvi_signal.interference(hourly, snos, in_range),
+                "now_local": datetime.fromtimestamp(now, tz).strftime("%Y-%m-%dT%H:%M"),
+                "tz": app.config["TIMEZONE"], "powered_w": harvi_signal.POWERED_W,
+                "silence_s": harvi_signal.SILENCE_S}
+
+    def harvi_signal_chart(days, snos, changes, tz):
+        """Daily hit rate and silences per powered hour, as two panels in a 1000 x 100 viewBox."""
+        n = len(days)
+        t0, t1 = days[0]["a"], days[-1]["b"]
+        rate_max, rate_step = energy._nice_max(max([d["per"][s]["silence_rate"] or 0 for d in days for s in snos] + [0.5]))
+
+        def series(key, mx, scale=1.0):
+            out = []
+            for k, sno in enumerate(snos):
+                pts = []
+                for i, d in enumerate(days):
+                    v = d["per"][sno][key]
+                    pts.append(None if v is None else ((i + 0.5) / n * 1000, round(100 - v * scale / mx * 100, 2)))
+                segs, cur = [], []
+                for p in pts:
+                    if p is None:
+                        if cur:
+                            segs.append(cur)
+                        cur = []
+                    else:
+                        cur.append(p)
+                if cur:
+                    segs.append(cur)
+                out.append({"sno": sno, "k": k, "segs": [" ".join(f"{x:.1f},{y}" for x, y in sg) for sg in segs],
+                            "dots": [{"x": round(x / 10, 2), "y": y} for x, y in (p for p in pts if p)]})
+            return out
+
+        every = max(1, round(n / 10))
+        rep_max = 4.0 if max([d["per"][s]["rate"] or 0 for d in days for s in snos] + [0]) <= 4 else \
+            energy._nice_max(max(d["per"][s]["rate"] or 0 for d in days for s in snos))[0]
+        return {"hit": series("rate", rep_max), "rate": series("silence_rate", rate_max),
+                "hit_ticks": [{"y": round(100 - v / rep_max * 100, 2), "text": f"{v:g}"}
+                              for v in [rep_max * i / 4 for i in range(1, 5)]],
+                "rate_ticks": [{"y": round(100 - v / rate_max * 100, 2), "text": f"{v:g}"}
+                               for v in [rate_step * i for i in range(1, int(round(rate_max / rate_step)) + 1)]],
+                "xlabels": [{"x": round((i + 0.5) / n * 100, 2), "text": d["date"].strftime("%-d %b")}
+                            for i, d in enumerate(days) if i % every == 0 or i == n - 1],
+                "marks": [{"x": round((c["ts"] - t0) / (t1 - t0) * 100, 2), "note": c["note"],
+                           "when": datetime.fromtimestamp(c["ts"], tz).strftime("%-d %b %H:%M")}
+                          for c in changes if t0 <= c["ts"] <= t1],
+                "hover": [{"d": d["date"].strftime("%a %-d %b"),
+                           "v": [{"rep": d["per"][s]["rate"], "hit": d["per"][s]["hit"], "rate": d["per"][s]["silence_rate"],
+                                  "med": d["per"][s]["median"], "ph": round(d["per"][s]["powered_h"], 1)}
+                                 for s in snos]} for d in days]}
+
+    @app.post("/signal/changes")
+    def add_change():
+        note = (request.form.get("note") or "").strip()[:200]
+        try:
+            when = datetime.strptime(request.form.get("when", ""), "%Y-%m-%dT%H:%M").replace(tzinfo=local_tz())
+        except ValueError:
+            when = None
+        if note and when:
+            store.add_change(when.timestamp(), note)
+        return redirect(url_for("stored_report", **{k: v for k, v in request.args.items()}) + "#signal")
+
+    @app.post("/signal/changes/<int:change_id>/delete")
+    def delete_change(change_id):
+        store.delete_change(change_id)
+        return redirect(url_for("stored_report", **{k: v for k, v in request.args.items()}) + "#signal")
 
     @app.get("/report.png")
     def stored_report_png():

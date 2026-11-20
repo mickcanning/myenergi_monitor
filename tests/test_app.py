@@ -759,6 +759,69 @@ def test_quiet_solar_harvi_counts_as_zero(tmp_path):
     assert abs(home - 0.375) < 1e-6 and charge == 0 and g_batt == 0 and abs(imp - 0.375) < 1e-9
 
 
+def _signal_store(tmp_path, loss_before, loss_after, change):
+    """Two Harvis transmitting every 20 s while their CT carries 3 kW; each transmission is lost with the given
+    probability; the second Harvi has no current (so is quiet) for the middle 2 hours of each 6."""
+    import random, recorder
+    random.seed(7)
+    st = recorder.Store(tmp_path / f"sig{loss_before}{loss_after}.db")
+    st._conn().execute("PRAGMA synchronous = OFF")
+    t0 = 1795000000 // 86400 * 86400
+    rows, last, nxt = [], {"g": (t0, 3000), "b": (t0, 3000)}, {"g": t0, "b": t0}
+    for t in range(t0, t0 + 2 * 86400, 15):
+        for sno in ("g", "b"):
+            w = 0 if sno == "b" and (t - t0) % 21600 >= 7200 and (t - t0) % 21600 < 14400 else 3000
+            while nxt[sno] <= t:
+                if w and random.random() > (loss_before if t < change else loss_after):
+                    last[sno] = (nxt[sno], w)
+                nxt[sno] += 20
+            rows.append((t, "harvi", sno, last[sno][0], t - last[sno][0], last[sno][1], 0, 0))
+    with st._conn() as c:
+        c.executemany("INSERT INTO readings VALUES (?, ?, ?, ?, ?, ?, 0, 0)", [r[:6] for r in rows])
+    return st, t0
+
+
+def test_harvi_signal_metrics(tmp_path):
+    import harvi_signal
+    t0 = 1795000000 // 86400 * 86400
+    change = t0 + 86400
+    st, _ = _signal_store(tmp_path, 0.3, 0.1, change)
+    hourly = harvi_signal.compute(st, t0, t0 + 2 * 86400, grid_sno="g")
+    before = [h for h in hourly if h < change - 1800]
+    after = [h for h in hourly if h >= change + 1800]
+    sg_b = harvi_signal.summary(harvi_signal._sum(hourly, "g", before))
+    sg_a = harvi_signal.summary(harvi_signal._sum(hourly, "g", after))
+    # ~3 transmissions a minute, 70% then 90% get through (polling every 15 s sees nearly all of them)
+    assert 1.8 < sg_b["rate"] < 2.3 and 2.3 < sg_a["rate"] < 2.8 and sg_a["silences"] < sg_b["silences"]
+    # the second Harvi's quiet spells with no current don't count against it: its powered time is ~2/3
+    sb = harvi_signal.summary(harvi_signal._sum(hourly, "b", before))
+    sg = harvi_signal.summary(harvi_signal._sum(hourly, "g", before))
+    assert 0.55 < sb["powered_h"] / sg["powered_h"] < 0.75 and abs(sb["rate"] - sg["rate"]) < 0.3
+    cmp = {r["sno"]: r for r in harvi_signal.compare(hourly, ["g", "b"], before, after)}
+    assert cmp["g"]["tone"] == "good" and 15 < cmp["g"]["rate_pct"][0] < 45
+    # no change -> no verdict either way
+    st2, _ = _signal_store(tmp_path, 0.2, 0.2, change)
+    h2 = harvi_signal.compute(st2, t0, t0 + 2 * 86400, grid_sno="g")
+    assert {r["tone"] for r in harvi_signal.compare(h2, ["g"], [h for h in h2 if h < change], [h for h in h2 if h >= change])} == {"none"}
+
+
+def test_signal_page_and_change_log(tmp_path):
+    a = make_recorded_app(tmp_path, hours=6, step=60)
+    a.config["NOW"] = 1795000000 + 3 * 3600
+    c = a.test_client()
+    html = c.get("/report").get_data(as_text=True)
+    assert 'id="signal"' in html and "reports per powered minute" in html and "No changes logged yet" in html
+    r = c.post("/signal/changes", data={"when": "2026-11-19T10:15", "note": "Larger antenna"})
+    assert r.status_code == 302 and r.headers["Location"].endswith("#signal")
+    html = c.get("/report").get_data(as_text=True)
+    assert "Larger antenna" in html and "Reports/min before" in html
+    cid = a.extensions["store"].changes()[0]["id"]
+    assert c.post("/signal/changes", data={"when": "nonsense", "note": "x"}).status_code == 302
+    assert len(a.extensions["store"].changes()) == 1                   # a bad time is ignored
+    c.post(f"/signal/changes/{cid}/delete")
+    assert a.extensions["store"].changes() == []
+
+
 if __name__ == "__main__":
     import tempfile
     for fn in (test_dashboard_and_api, test_upload_and_report, test_current_report_persists,
@@ -768,7 +831,7 @@ if __name__ == "__main__":
                test_stored_report_with_recording_gap, test_overview_page, test_energy_buckets_and_totals,
                test_flow_recording_and_backfill, test_energy_page, test_estimate_combines_measured_and_sampled,
                test_history_sync, test_estimate_overnight_battery_charging, test_minutes_table_upgrade,
-               test_quiet_solar_harvi_counts_as_zero):
+               test_quiet_solar_harvi_counts_as_zero, test_harvi_signal_metrics, test_signal_page_and_change_log):
         with tempfile.TemporaryDirectory() as d:
             fn(Path(d))
             print("ok", fn.__name__)

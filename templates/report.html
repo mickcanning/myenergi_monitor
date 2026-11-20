@@ -10,6 +10,7 @@
   {% include "_recording.html" %}
 </p>
 {% if rng.note %}<p class="notice" role="status">{{ rng.note }}</p>{% endif %}
+{% if signal %}{% include "_signal.html" %}{% endif %}
 {% else %}
 <p class="muted">
   From an uploaded log: {{ stats.polls }} polls from {{ stats.start.strftime('%Y-%m-%d %H:%M') }} to {{ stats.end.strftime('%Y-%m-%d %H:%M') }} UTC.
