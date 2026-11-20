@@ -177,10 +177,13 @@ def chart(s):
     n = len(rows)
     col = 1000 / n
 
-    # stacked cumulative layers, bottom to top; home is always shown, the rest only if they happened
+    # energy usage per slot, stacked bottom to top as steps (each slot holds its own total, so a layer drops
+    # back to zero when that use stops); home is always shown, the rest only if they happened
     shown = [k for k in USES if k == "home" or s["uses"][k] >= 0.005]
-    tops = [sum((r["uses_cum"] or {}).get(k, 0) for k in shown) for r in rows if r["uses_cum"]]
-    cum_max, cum_step = _nice_max(max(tops + [(r["cum"] or 0) + (r["cum_err"] or 0) for r in rows] + [0]))
+    past = [r for r in rows if r["uses"] is not None]
+    tops = [sum(r["uses"][k] for k in shown) for r in past]
+    use_max, use_step = _nice_max(max(tops + [0]))
+    cum_max, cum_step = _nice_max(max([(r["cum"] or 0) + (r["cum_err"] or 0) for r in rows] + [0]))
     bar_max, bar_step = _nice_max(max([(r["kwh"] or 0) + (r["err"] or 0) for r in rows] + [0]))
 
     def y(v, mx):
@@ -192,20 +195,20 @@ def chart(s):
             break
         pts.append((round((i + 1) * col, 2), y(r["cum"], cum_max)))
     line = " ".join(f"{x},{yy}" for x, yy in pts)
-    xs = [0] + [round((i + 1) * col, 2) for i, r in enumerate(rows) if r["uses_cum"] is not None]
-    base = [0.0] * len(xs)
     layers = []
+    base = [0.0] * len(past)
     for k in shown:
-        vals = [0.0] + [r["uses_cum"][k] for r in rows if r["uses_cum"] is not None]
-        top = [b + v for b, v in zip(base, vals)]
-        if len(xs) > 1:
-            up = " L".join(f"{x},{y(t, cum_max)}" for x, t in zip(xs, top))
-            down = " L".join(f"{x},{y(b, cum_max)}" for x, b in reversed(list(zip(xs, base))))
+        top = [bb + r["uses"][k] for bb, r in zip(base, past)]
+        if past:
+            up, down = [], []
+            for i, (t, bb) in enumerate(zip(top, base)):
+                x0, x1 = round(i * col, 2), round((i + 1) * col, 2)
+                up += [f"{x0},{y(t, use_max)}", f"{x1},{y(t, use_max)}"]
+                down += [f"{x0},{y(bb, use_max)}", f"{x1},{y(bb, use_max)}"]     # reversed below
             layers.append({"key": k, "label": USE_LABELS[k], "total": s["uses"][k],
-                           "area": f"M{up} L{down} Z",
-                           "line": " ".join(f"{x},{y(t, cum_max)}" for x, t in zip(xs, top))})
+                           "area": "M" + " L".join(up + list(reversed(down))) + " Z",
+                           "line": " ".join(up)})
         base = top
-    stack_total = base[-1] if base else 0.0
     area = ("M0,100 L" + " L".join(f"{x},{yy}" for x, yy in pts) + f" L{pts[-1][0]},100 Z") if len(pts) > 1 else ""
     # likely range of the running total (approximate 95%), as a band around the line
     upper, lower = [(0, 100)], [(0, 100)]
@@ -278,8 +281,7 @@ def chart(s):
 
     last = pts[-1] if len(pts) > 1 else None
     return {"line": line, "area": area, "band": band, "bars": bars, "xlabels": xlabels, "n": n,
-            "layers": layers, "stack_total": stack_total,
-            "stack_last": {"x": xs[-1] / 10, "y": y(stack_total, cum_max)} if len(xs) > 1 else None,
+            "layers": layers, "use_ticks": ticks(use_max, use_step),
             "cum_ticks": ticks(cum_max, cum_step), "bar_ticks": ticks(bar_max, bar_step),
             "imp_bars": imp_bars, "imp_ticks": ticks(imp_max, imp_step),
             "last": {"x": last[0] / 10, "y": last[1]} if last else None,
@@ -295,5 +297,5 @@ def chart(s):
                        "s": None if r["solar"] is None else round(r["solar"], 3),
                        "g": None if r["grid"] is None else round(r["grid"], 3),
                        "c": None if r["cum"] is None else round(r["cum"], 3),
-                       "u": None if r["uses_cum"] is None else [round(r["uses_cum"][k], 3) for k in shown],
+                       "u": None if r["uses"] is None else [round(r["uses"][k], 3) for k in shown],
                        "p": None if r["coverage"] is None else round(r["coverage"] * 100)} for r in rows]}
