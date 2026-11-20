@@ -97,7 +97,7 @@ def init_auth(app):
 
     @app.route("/login", methods=["GET", "POST"])
     def login():
-        nxt = _safe_next(request.values.get("next")) or url_for("dashboard")
+        nxt = _safe_next(request.values.get("next")) or url_for("overview")
         if signed_in():
             return redirect(nxt)
         error, status = None, 200

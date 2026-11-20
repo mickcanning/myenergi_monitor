@@ -30,35 +30,48 @@
   <p class="muted">Only needed for logs recorded elsewhere: this app records continuously on its own.</p>
 </details>
 
-<form method="get" class="panel controls">
+{% set grid_label = names.get(params.grid_sno) or params.grid_sno %}
+<form method="get" class="panel graph-options">
   {% if source == 'stored' %}
-  <div class="range">
-    <label>From (UTC) <input type="datetime-local" name="from" value="{{ rng.from_s }}"
-      min="{{ rng.lo.strftime('%Y-%m-%dT%H:%M') }}" max="{{ rng.hi.strftime('%Y-%m-%dT%H:%M') }}" required></label>
-    <label>To (UTC) <input type="datetime-local" name="to" value="{{ rng.to_s }}"
-      min="{{ rng.lo.strftime('%Y-%m-%dT%H:%M') }}" max="{{ rng.hi.strftime('%Y-%m-%dT%H:%M') }}" required></label>
-    <span class="presets">
-      {% for label, p in rng.presets %}
-        {% set args = request.args.to_dict() %}{% set _ = args.update(p) %}
-        <a href="{{ url_for('stored_report', **args) }}" {% if p['from'] == rng.from_s and p['to'] == rng.to_s %}class="on"{% endif %}>{{ label }}</a>
-      {% endfor %}
-    </span>
-    <span class="muted">Recorded data: {{ rng.lo.strftime('%Y-%m-%d %H:%M') }} to {{ rng.hi.strftime('%Y-%m-%d %H:%M') }} UTC</span>
+  <div class="presets" aria-label="Quick ranges">
+    {% for label, p in rng.presets %}
+      {% set args = request.args.to_dict() %}{% set _ = args.update(p) %}
+      <a href="{{ url_for('stored_report', **args) }}" {% if p['from'] == rng.from_s and p['to'] == rng.to_s %}class="on"{% endif %}>{{ label }}</a>
+    {% endfor %}
   </div>
   {% endif %}
-  <label>Grid Harvi
-    <select name="grid">
-      {% for s in serials %}
-        <option value="{{ s }}" {% if s == params.grid_sno %}selected{% endif %}>{{ names.get(s) ~ ' (' ~ s ~ ')' if names.get(s) else s }}</option>
-      {% endfor %}
-    </select>
-  </label>
-  <label>Threshold line (s) <input type="number" name="thresh" value="{{ '%g' % params.thresh_s }}" min="1" step="any"></label>
-  <label>Concern: silence at least (s) <input type="number" name="gap" value="{{ '%g' % params.gap_s }}" min="1" step="any"></label>
-  <label>&hellip; with more than (W) <input type="number" name="ct" value="{{ '%g' % params.ct_w }}" min="0" step="any"></label>
-  <label>Night from (h) <input type="number" name="ns" value="{{ params.night_start }}" min="0" max="23"></label>
-  <label>to (h) <input type="number" name="ne" value="{{ params.night_end }}" min="0" max="23"></label>
-  <button type="submit">Update</button>
+  <details id="graph-options">
+    <summary>
+      <span class="summary-title">Options</span>
+      <span class="summary-text">
+        {% if source == 'stored' %}{{ rng.from_s | replace('T', ' ') }} to {{ rng.to_s | replace('T', ' ') }} UTC · {% endif %}Grid: {{ grid_label }} · Threshold {{ '%g' % params.thresh_s }} s
+      </span>
+    </summary>
+    <div class="controls">
+      {% if source == 'stored' %}
+      <div class="range">
+        <label>From (UTC) <input type="datetime-local" name="from" value="{{ rng.from_s }}"
+          min="{{ rng.lo.strftime('%Y-%m-%dT%H:%M') }}" max="{{ rng.hi.strftime('%Y-%m-%dT%H:%M') }}" required></label>
+        <label>To (UTC) <input type="datetime-local" name="to" value="{{ rng.to_s }}"
+          min="{{ rng.lo.strftime('%Y-%m-%dT%H:%M') }}" max="{{ rng.hi.strftime('%Y-%m-%dT%H:%M') }}" required></label>
+        <span class="muted">Recorded data: {{ rng.lo.strftime('%Y-%m-%d %H:%M') }} to {{ rng.hi.strftime('%Y-%m-%d %H:%M') }} UTC</span>
+      </div>
+      {% endif %}
+      <label>Grid Harvi
+        <select name="grid">
+          {% for s in serials %}
+            <option value="{{ s }}" {% if s == params.grid_sno %}selected{% endif %}>{{ names.get(s) ~ ' (' ~ s ~ ')' if names.get(s) else s }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Threshold line (s) <input type="number" name="thresh" value="{{ '%g' % params.thresh_s }}" min="1" step="any"></label>
+      <label>Concern: silence at least (s) <input type="number" name="gap" value="{{ '%g' % params.gap_s }}" min="1" step="any"></label>
+      <label>&hellip; with more than (W) <input type="number" name="ct" value="{{ '%g' % params.ct_w }}" min="0" step="any"></label>
+      <label>Night from (h) <input type="number" name="ns" value="{{ params.night_start }}" min="0" max="23"></label>
+      <label>to (h) <input type="number" name="ne" value="{{ params.night_end }}" min="0" max="23"></label>
+      <button type="submit">Update</button>
+    </div>
+  </details>
 </form>
 
 <img class="chart" data-themed-src="{{ png_url }}?{{ query }}" alt="Harvi report age and CT power over time">

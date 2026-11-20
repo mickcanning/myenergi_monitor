@@ -13,6 +13,7 @@ import io
 from urllib.parse import urlencode
 
 import charts
+import flow
 import recorder
 from auth import init_auth
 import live_chart
@@ -79,6 +80,7 @@ def create_app(test_config=None):
     os.makedirs(app.config["UPLOAD_DIR"], exist_ok=True)
     init_auth(app)   # no-op unless APP_PASSWORD is set
     app.add_template_filter(format_duration, "duration")
+    app.add_template_filter(lambda w: flow.fmt_power(flow._num(w)), "power")
     os.makedirs(os.path.dirname(app.config["DB_PATH"]) or ".", exist_ok=True)
     store = app.extensions["store"] = recorder.Store(app.config["DB_PATH"])
 
@@ -182,7 +184,31 @@ def create_app(test_config=None):
         """Liveness check for Docker: answers without calling the myenergi API."""
         return "ok", 200, {"Content-Type": "text/plain"}
 
+    def overview_context():
+        status = current_status()
+        devices = apply_ct_prefs(summarise(status, app.config["HARVI_NAMES"]))
+        for d in devices:
+            d["image"] = url_for("static", filename=device_image(d["kind"]))
+        hub = next((d for d in devices if d["is_hub"]), devices[0] if devices else None)
+        return {"flow": flow.build(status), "devices": devices, "error": None,
+                "reading_utc": hub and hub["report_utc"], "reading_age": hub and hub["age_s"]}
+
     @app.get("/")
+    def overview():
+        try:
+            ctx = overview_context()
+        except MyEnergiError as e:
+            ctx = {"flow": None, "devices": [], "error": str(e)}
+        return render_template("overview.html", refresh=app.config["REFRESH_SECONDS"], **ctx)
+
+    @app.get("/partials/overview")
+    def overview_partial():
+        try:
+            return render_template("_overview.html", **overview_context())
+        except MyEnergiError as e:
+            return render_template("_overview.html", flow=None, devices=[], error=str(e)), 502
+
+    @app.get("/live")
     def dashboard():
         try:
             devices, error = live_devices(), None

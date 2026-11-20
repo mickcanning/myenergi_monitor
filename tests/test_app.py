@@ -50,7 +50,7 @@ def make_app(tmp_path):
 
 def test_dashboard_and_api(tmp_path):
     c = make_app(tmp_path).test_client()
-    html = c.get("/").get_data(as_text=True)
+    html = c.get("/live").get_data(as_text=True)
     assert "Eddi" in html and "Internal Load" in html and "Grid" in html
     assert "50.01 Hz" in html and "234.5 V" in html          # auto-scaled units
     data = c.get("/api/status").get_json()
@@ -108,7 +108,7 @@ def test_current_report_persists(tmp_path):
 
 def test_ct_choice(tmp_path):
     c = make_app(tmp_path).test_client()
-    page = lambda cl=c: cl.get("/").get_data(as_text=True)
+    page = lambda cl=c: cl.get("/live").get_data(as_text=True)
     # automatic: only the CT with a purpose is shown, unused ones are hidden
     html = page()
     assert "<td>Internal Load</td>" in html and "<td>None</td>" not in html and "1 of 3, automatic" in html
@@ -371,7 +371,7 @@ def test_stored_report(tmp_path):
     lo, hi = c.application.extensions["store"].span()
     fmt = lambda x: dt.fromtimestamp(x, tz.utc).strftime("%Y-%m-%dT%H:%M")
     # the nav goes to the recorded-data report; default range is the last 24 h of data
-    page = c.get("/").get_data(as_text=True)
+    page = c.get("/live").get_data(as_text=True)
     assert 'href="/report"' in page
     html = c.get("/report").get_data(as_text=True)
     assert 'type="datetime-local"' in html and f'value="{fmt(hi + 60)}"' in html
@@ -492,13 +492,49 @@ def test_stored_report_with_recording_gap(tmp_path):
     assert png.status_code == 200 and png.data[:4] == b"\x89PNG"
 
 
+def test_flow_values():
+    import flow
+    status = {
+        "eddi": [{"sno": 1, "isVHubEnabled": True, "grd": 15, "gen": 0, "div": 1200, "sta": 3, "tp1": 55,
+                  "ectp1": 1200, "ectt1": "Internal Load"}],
+        "zappi": [{"sno": 2, "div": 0, "pst": "A", "zmo": 3, "ectp1": 0, "ectt1": "Internal Load"}],
+        "harvi": [{"sno": 3, "ectp1": 3000, "ectt1": "Generation & Battery"},
+                  {"sno": 4, "ectp1": -1000, "ectt1": "Grid"}],
+    }
+    v = flow.compute(status)
+    assert v["grid"] == -1000 and v["solar"] == 3000 and v["eddi"] == 1200 and v["zappi"] == 0
+    assert v["home"] == 800 and v["self_pct"] == 100                 # exporting: all use is self-powered
+    b = flow.build(status)
+    by = {n["key"]: n for n in b["nodes"]}
+    assert by["solar"]["label"] == "Solar & battery" and by["grid"]["caption"] == ["Exporting"]
+    assert by["eddi"]["caption"] == ["Heating", "Tank 55 °C"] and by["zappi"]["caption"] == ["Car unplugged", "Eco+ mode"]
+    assert by["grid"]["active"] and by["zappi"]["link"]["cls"] == "idle"
+    # importing at night, no Grid CT: falls back to the hub's grd; battery charging shows as negative solar
+    status["harvi"] = [{"sno": 3, "ectp1": -500, "ectt1": "Generation & Battery"}]
+    status["eddi"][0].update(grd=2000, div=0)
+    v = flow.compute(status)
+    assert v["grid"] == 2000 and v["home"] == 1500 and v["self_pct"] == 0
+    assert {n["key"]: n for n in flow.build(status)["nodes"]}["solar"]["caption"] == ["Battery charging"]
+    assert flow.fmt_power(873) == "873 W" and flow.fmt_power(-1234) == "1.2 kW" and flow.fmt_power(None) == "–"
+
+
+def test_overview_page(tmp_path):
+    c = make_app(tmp_path).test_client()
+    html = c.get("/").get_data(as_text=True)
+    assert "<h1>Overview</h1>" in html and 'class="flow"' in html and 'class="on">Overview' in html
+    assert "4.0 kW" in html and "Hot water" in html and "Importing" in html     # 4000 W on the Grid CT
+    assert 'href="/live#eddi-999"' in html and 'href="/live#harvi-111"' in html
+    assert c.get("/partials/overview").status_code == 200
+    assert 'id="eddi-999"' in c.get("/live").get_data(as_text=True)
+
+
 if __name__ == "__main__":
     import tempfile
     for fn in (test_dashboard_and_api, test_upload_and_report, test_current_report_persists,
                test_ct_choice, test_ct_chart_builds_up, test_upload_rejects_bad_files, test_behind_proxy,
                test_login, test_login_secure_cookie_and_throttle, test_recorder_and_store,
                test_stored_report, test_stored_report_long_range_and_empty, test_live_chart_from_recorded_data,
-               test_stored_report_with_recording_gap):
+               test_stored_report_with_recording_gap, test_overview_page):
         with tempfile.TemporaryDirectory() as d:
             fn(Path(d))
             print("ok", fn.__name__)
@@ -506,6 +542,8 @@ if __name__ == "__main__":
     print("ok test_load_log_errors")
     test_format_duration()
     print("ok test_format_duration")
+    test_flow_values()
+    print("ok test_flow_values")
     test_silences_respect_recording_gaps()
     print("ok test_silences_respect_recording_gaps")
     test_client_ignores_undefined_server_name()

@@ -2,7 +2,8 @@
 
 A small local Flask app for investigating Harvi link problems on a myenergi system.
 
-- **Live values** (`/`): the latest readings for every device on your hub (Eddi, Zappi, Libbi, Harvi), refreshed automatically, with how old each device's last report is.
+- **Overview** (`/`, the start page): a simple power-flow picture of the system right now. Solar (and battery) and the grid sit at the top, home, hot water (Eddi) and car (Zappi) at the bottom. Arrows show which way power is flowing, and the centre shows how much of what you're using is self-powered. Grid and solar come from the CTs named Grid and Generation (or Generation & Battery). Hot water and car come from each device's diverted power. Home is estimated as grid + solar − hot water − car. Below the picture, each device is listed with its CT readings.
+- **Live values** (`/live`): the latest readings for every device on your hub (Eddi, Zappi, Libbi, Harvi), refreshed automatically, with how old each device's last report is.
 - **Recording**: while the app runs it polls the API every 15 s in the background and stores every reading in `instance/readings.db` (kept 180 days, about 1.7 MB a day).
 - **Graphs** (`/report`): pick a start and end date within the recorded data (up to 31 days at a time) and get the report chart and tables: Harvi report age, CT power, silences over a threshold, and "gaps of concern" (long silences while current was flowing, so low harvested power doesn't explain them). You can still upload a CSV from `monitor.py` instead.
 - **`monitor.py`**: optional command-line logger for recording somewhere the app isn't running; its CSV can be uploaded to the report.

@@ -5,7 +5,7 @@
 {% endif %}
 <div class="cards">
 {% for d in devices %}
-  <section class="card kind-{{ d.kind }}{{ ' is-hub' if d.is_hub }}">
+  <section id="{{ d.kind }}-{{ d.sno }}" class="card kind-{{ d.kind }}{{ ' is-hub' if d.is_hub }}">
     {% if d.is_hub %}
     <span class="hub-badge" role="img" aria-label="Hub" title="Hub: the master device that reports this system to the myenergi cloud">
       <svg viewBox="0 0 64 40" aria-hidden="true">

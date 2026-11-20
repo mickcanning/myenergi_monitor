@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Overview · myenergi monitor{% endblock %}
+{% block content %}
+<h1>Overview</h1>
+<div id="overview">{% include "_overview.html" %}</div>
+<script>
+  (function () {
+    const box = document.getElementById("overview");
+    async function refresh() {
+      try {
+        const r = await fetch("{{ url_for('overview_partial') }}", {cache: "no-store"});
+        if (r.status === 401) return location.reload();   // signed out: reload into the login page
+        box.innerHTML = await r.text();
+      } catch (e) {
+        const s = document.getElementById("status");
+        if (s) s.textContent = "Refresh failed: " + e;
+      }
+    }
+    setInterval(refresh, {{ refresh * 1000 }});
+  })();
+</script>
+{% endblock %}

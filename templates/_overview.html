@@ -1,0 +1,67 @@
+{% if error %}
+  <p class="error" role="alert">{{ error }}</p>
+{% elif flow %}
+{% set cx, cy = flow.centre %}
+<p class="muted overview-time">
+  {% if reading_utc %}Readings from {{ reading_utc }} UTC{% if reading_age is not none %} ({{ reading_age | duration }} ago){% endif %}.{% endif %}
+  <span id="status"></span>
+</p>
+<figure class="flow">
+  <svg viewBox="0 0 380 430" role="img" aria-labelledby="flow-title">
+    <title id="flow-title">Power flow:
+      {% for n in flow.nodes %}{{ n.label }} {{ n.value }} {{ n.caption | join(", ") }}{{ '; ' if not loop.last }}{% endfor %}.
+      {% if flow.self_pct is not none %}{{ flow.self_pct }}% self-powered.{% endif %}</title>
+    {% for n in flow.nodes %}{% set l = n.link %}
+    <line class="link {{ l.cls }}" x1="{{ l.x1 }}" y1="{{ l.y1 }}" x2="{{ l.x2 }}" y2="{{ l.y2 }}"/>
+    {% if l.active %}
+    <path class="arrow {{ l.cls }}" d="M-6,-6 L6,0 L-6,6 z" transform="translate({{ l.mx }} {{ l.my }}) rotate({{ l.angle }})"/>
+    {% endif %}
+    {% endfor %}
+
+    <circle class="hub-ring" cx="{{ cx }}" cy="{{ cy }}" r="{{ flow.hub_r }}"/>
+    {% if flow.self_pct is not none %}
+    <text class="hub-pct" x="{{ cx }}" y="{{ cy + 4 }}" text-anchor="middle">{{ flow.self_pct }}%</text>
+    <text class="hub-sub" x="{{ cx }}" y="{{ cy + 20 }}" text-anchor="middle">self-powered</text>
+    {% else %}
+    <text class="hub-sub" x="{{ cx }}" y="{{ cy + 4 }}" text-anchor="middle">No load</text>
+    {% endif %}
+
+    {% for n in flow.nodes %}
+    <g class="node {{ n.cls }}">
+      <circle cx="{{ n.x }}" cy="{{ n.y }}" r="{{ flow.node_r }}"/>
+      <g class="icon" transform="translate({{ n.x - 18 }} {{ n.y - 18 }}) scale(1.5)">{{ n.icon | safe }}</g>
+      {% if n.top %}
+      <text class="node-label" x="{{ n.x }}" y="{{ n.y - 64 }}" text-anchor="middle">{{ n.label }}</text>
+      <text class="node-value" x="{{ n.x }}" y="{{ n.y - 44 }}" text-anchor="middle">{{ n.value }}</text>
+      <text class="node-cap" x="{{ n.x }}" y="{{ n.y + 50 }}" text-anchor="middle">{{ n.caption | join(' · ') }}</text>
+      {% else %}
+      <text class="node-value" x="{{ n.x }}" y="{{ n.y + 56 }}" text-anchor="middle">{{ n.value }}</text>
+      <text class="node-label" x="{{ n.x }}" y="{{ n.y + 74 }}" text-anchor="middle">{{ n.label }}</text>
+      {% for line in n.caption %}<text class="node-cap" x="{{ n.x }}" y="{{ n.y + 89 + loop.index0 * 13 }}" text-anchor="middle">{{ line }}</text>{% endfor %}
+      {% endif %}
+    </g>
+    {% endfor %}
+  </svg>
+  <figcaption class="muted">
+    Arrows show which way power is flowing. Home is estimated: grid + solar − hot water − car.
+  </figcaption>
+</figure>
+
+<div class="device-strip">
+  {% for d in devices %}
+  <a class="chip" href="{{ url_for('dashboard') }}#{{ d.kind }}-{{ d.sno }}">
+    <img src="{{ d.image }}" alt="" width="36" height="36">
+    <span class="chip-body">
+      <span class="chip-name">{{ d.name or d.label }}{% if d.is_hub %} <span class="badge">hub</span>{% endif %}
+        <i class="dot {{ d.freshness }}" title="Last report {{ d.age_s | duration if d.age_s is not none else 'unknown' }} ago"></i></span>
+      {% set shown = d.cts | selectattr('shown') | list %}
+      {% for ct in shown %}
+      <span class="chip-ct">{{ ct.name }} <b>{{ ct.watts | power }}</b></span>
+      {% else %}
+      <span class="chip-ct muted">No CTs in use</span>
+      {% endfor %}
+    </span>
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
