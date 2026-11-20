@@ -93,26 +93,28 @@ def summarise(store, period, day, tz, now_ts):
     halves = estimate.half_hours(store, lo, min(hi, now_ts + 1800), now_ts)
     starts = [b[0] for b in bks]
     n = len(bks)
-    kwh, from_grid, var, covered, measured, sampled = ([0.0] * n for _ in range(6))
-    for hh, (e, g, v, cov, meas, smp) in halves.items():
+    kwh, from_grid, var, covered, measured, sampled, imp, exp_, g_batt, g_dev = ([0.0] * n for _ in range(10))
+    for hh, vals in halves.items():
         i = bisect_right(starts, hh) - 1
         if 0 <= i < n:
-            kwh[i] += e or 0
-            from_grid[i] += g or 0
-            var[i] += v or 0
-            covered[i] += cov or 0
-            measured[i] += meas or 0
-            sampled[i] += smp or 0
+            for arr, v in zip((kwh, from_grid, var, covered, measured, sampled, imp, exp_, g_batt, g_dev), vals):
+                arr[i] += v or 0
     rows, total, total_grid, total_var, total_sampled = [], 0.0, 0.0, 0.0, 0.0
+    imp_t = {"imp": 0.0, "exp": 0.0, "home": 0.0, "batt": 0.0, "dev": 0.0}
     for k, (a, b, short, long) in enumerate(bks):
         e, g = kwh[k], min(max(from_grid[k], 0.0), max(kwh[k], 0.0))
         future = a >= now_ts
         span = max(1.0, min(b, now_ts) - a)                       # only the part of the bucket that has happened
+        # where this slot's grid import went; anything we couldn't attribute (no solar & battery reading)
+        dest = {"home": g, "batt": g_batt[k], "dev": g_dev[k]}
+        unattr = max(imp[k] - sum(dest.values()), 0.0)
         if not future:
             total += e
             total_grid += g
             total_var += var[k]
             total_sampled += sampled[k]
+            for key, v in (("imp", imp[k]), ("exp", exp_[k]), *dest.items()):
+                imp_t[key] += v
         rows.append({"start": a, "end": b, "label": short, "long": long, "kwh": None if future else e,
                      "grid": None if future else g, "solar": None if future else max(e - g, 0.0),
                      "err": None if future else estimate.ci95(var[k]),
@@ -120,6 +122,9 @@ def summarise(store, period, day, tz, now_ts):
                      "cum": None if future else total, "cum_err": None if future else estimate.ci95(total_var),
                      "coverage": None if future else min(1.0, covered[k] / span),
                      "measured": None if future else min(1.0, measured[k] / span),
+                     "imp": None if future else imp[k], "exp": None if future else exp_[k],
+                     "imp_home": None if future else g, "imp_batt": None if future else g_batt[k],
+                     "imp_dev": None if future else g_dev[k], "imp_unattr": None if future else unattr,
                      "current": a <= now_ts < b})
     past = [r for r in rows if r["kwh"] is not None]
     spans = [min(r["end"], now_ts) - r["start"] for r in past]
@@ -132,6 +137,7 @@ def summarise(store, period, day, tz, now_ts):
             "coverage": sum(r["coverage"] * w for r, w in zip(past, spans)) / span if span else 0.0,
             "measured": sum(r["measured"] * w for r, w in zip(past, spans)) / span if span else 0.0,
             "busiest": busiest, "in_progress": lo <= now_ts < hi, "future": lo > now_ts,
+            "imports": {**imp_t, "unattr": max(imp_t["imp"] - imp_t["home"] - imp_t["batt"] - imp_t["dev"], 0.0)},
             "bucket_word": BUCKET_WORD[period]}
 
 
@@ -216,6 +222,24 @@ def chart(s):
             minor = s["period"] == "day" and i % 12 != 0     # 03:00, 09:00...: hidden on narrow screens
             xlabels.append({"x": round(pos / 10, 2), "text": r["label"], "minor": minor})
 
+    # grid import per slot, stacked by where it went (bottom to top)
+    imp_max, imp_step = _nice_max(max([r["imp"] or 0 for r in rows] + [0]))
+    imp_bars = []
+    for i, r in enumerate(rows):
+        if not r["imp"]:
+            continue
+        x, w = round(i * col + pad / 2, 2), round(col - pad, 2)
+        parts, base = [], 0.0
+        for cls, key in (("home", "imp_home"), ("batt", "imp_batt"), ("dev", "imp_dev"), ("unattr", "imp_unattr")):
+            v = r[key] or 0
+            y_lo, y_hi = y(base, imp_max), y(base + v, imp_max)
+            base += v
+            if y_lo - y_hi < 1:                          # too thin to see
+                continue
+            bottom = y_lo - (seam if parts and y_lo - y_hi > seam * 2 else 0)
+            parts.append({"cls": cls, "y": y_hi, "h": round(bottom - y_hi, 2)})
+        imp_bars.append({"x": x, "w": w, "parts": parts})
+
     def ticks(mx, step):
         out, v = [], step
         while v <= mx + 1e-9:
@@ -226,9 +250,12 @@ def chart(s):
     last = pts[-1] if len(pts) > 1 else None
     return {"line": line, "area": area, "band": band, "bars": bars, "xlabels": xlabels, "n": n,
             "cum_ticks": ticks(cum_max, cum_step), "bar_ticks": ticks(bar_max, bar_step),
+            "imp_bars": imp_bars, "imp_ticks": ticks(imp_max, imp_step),
             "last": {"x": last[0] / 10, "y": last[1]} if last else None,
             "partial": any(b["partial"] for b in bars),
             "hover": [{"l": r["long"], "k": None if r["kwh"] is None else round(r["kwh"], 3),
+                       "i": None if r["imp"] is None else [round(r[k] or 0, 3) for k in
+                                                           ("imp", "exp", "imp_home", "imp_batt", "imp_dev", "imp_unattr")],
                        "e": None if r["err"] is None else round(r["err"], 3),
                        "m": None if r["sampled"] is None else round(r["sampled"], 3),
                        "ce": None if r["cum_err"] is None else round(r["cum_err"], 3),

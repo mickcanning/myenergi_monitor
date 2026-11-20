@@ -9,8 +9,9 @@ Home use isn't measured by anything directly; it is  grid (import - export) + so
                    samples either side (up to INTERP_MAX_S apart).
 
 Uncertainty: the sampled solar value for a minute is a mean of k instantaneous readings, so its error is
-estimated as sigma^2 / k, where sigma^2 is the variance of the solar readings around that half hour (an
-interpolated minute counts as a single reading). Minute errors are summed as independent, which is
+estimated as sigma^2 / k, where sigma^2 is the short-term variance of the solar readings around that half
+hour, taken from successive differences so steady changes don't count as noise (an interpolated minute counts
+as a single reading). Minute errors are summed as independent, which is
 approximate: neighbouring readings are correlated, so the true spread can be somewhat wider.
 When the measured history isn't available yet (the last few minutes, before the next sync) the minute falls
 back to the sampled home power, with its own sampling error.
@@ -25,12 +26,25 @@ J_PER_KWH = 3.6e6
 
 
 def _var(xs):
-    return pvariance(xs) if len(xs) >= 2 else None
+    """Short-term variance of a run of readings, from the differences between consecutive ones
+    (von Neumann: mean squared successive difference / 2). Unlike the plain variance it isn't inflated by a
+    step or a trend, e.g. the battery switching from idle to charging, which is real change, not noise."""
+    if len(xs) < 3:
+        return None
+    d = [(b - a) ** 2 for a, b in zip(xs, xs[1:])]
+    return min(sum(d) / (2 * len(d)), pvariance(xs))
+
+
+FIELDS = ("home", "grid", "var", "covered", "measured", "sampled", "imp", "exp", "grid_batt", "grid_dev")
 
 
 def compute(store, start, end):
-    """{hh: (home kWh, from grid kWh, variance kWh^2, covered s, measured s, sampled kWh)} for half hours
-    in [start, end) (both multiples of 1800)."""
+    """{hh: tuple in FIELDS order} for half hours in [start, end) (both multiples of 1800):
+    home kWh, of which from the grid kWh, variance kWh^2, covered s, measured s, sampled-only kWh,
+    grid import kWh, grid export kWh, grid import that charged the battery kWh, and that went to the
+    Eddi/Zappi kWh. Import and export are the hub's measured totals whenever its history has the minute,
+    even if we have no solar samples then (so they match the myenergi app); the split of the import needs
+    the solar & battery reading as well."""
     out = {}
     day = 86400
     a = start
@@ -58,7 +72,7 @@ def _compute_chunk(store, start, end):
         i0, i1 = bisect_left(t_all, hh - HH), bisect_left(t_all, hh + 2 * HH)
         home_var = _var([s[5] for s in samples[i0:i1] if s[5] is not None]) or 0.0
 
-        home = grid = var = covered = measured = 0.0
+        home = grid = var = covered = measured = imp_j = exp_j = g_batt = g_dev = 0.0
         for m in range(hh, hh + HH, 60):
             j0, j1 = bisect_left(t_all, m), bisect_left(t_all, m + 60)
             here = samples[j0:j1]
@@ -80,11 +94,18 @@ def _compute_chunk(store, start, end):
                         s_w = s_var = None
 
             meas = mins.get(m)
+            if meas is not None and meas[0] is not None:
+                imp_j += meas[0]
+                exp_j += meas[1] or 0
             if meas is not None and meas[0] is not None and s_w is not None:
                 imp, exp_, div = (x / 60 for x in (meas[0], meas[1] or 0, meas[2] or 0))
                 h = max(0.0, imp - exp_ + s_w - div)
-                demand = h + div + max(-s_w, 0.0)
-                g = h * min(1.0, imp / demand) if demand > 0 else 0.0
+                charge = max(-s_w, 0.0)
+                demand = h + div + charge
+                f = min(1.0, imp / demand) if demand > 0 else 0.0
+                g = h * f
+                g_batt += charge * f * 60
+                g_dev += div * f * 60
                 home += h * 60
                 grid += g * 60
                 var += s_var * 3600
@@ -95,19 +116,33 @@ def _compute_chunk(store, start, end):
                 if not hs:
                     continue
                 h = sum(s[5] for s in hs) / len(hs)
-                g = 0.0
+                g = gb = gd = ip = ep = 0.0
                 for s in hs:
                     gr, so, ed, zp, hm = (s[1], s[2] or 0, s[3] or 0, s[4] or 0, s[5])
                     dem = hm + ed + zp + max(-so, 0)
-                    g += hm if gr is None else (hm * min(1.0, max(gr, 0) / dem) if dem > 0 else 0)
-                g /= len(hs)
+                    if gr is None:
+                        g += hm
+                        continue
+                    f = min(1.0, max(gr, 0) / dem) if dem > 0 else 0.0
+                    g += hm * f
+                    gb += max(-so, 0) * f
+                    gd += (ed + zp) * f
+                    ip += max(gr, 0)
+                    ep += max(-gr, 0)
+                k = len(hs)
                 home += h * 60
-                grid += g * 60
+                grid += g / k * 60
+                g_batt += gb / k * 60
+                g_dev += gd / k * 60
+                if meas is None:                        # (measured import already counted above)
+                    imp_j += ip / k * 60
+                    exp_j += ep / k * 60
                 var += home_var / len(hs) * 3600
                 covered += 60
         smp = sampled.get(hh)
         res[hh] = (home / J_PER_KWH, grid / J_PER_KWH, var / J_PER_KWH ** 2, covered, measured,
-                   smp[0] if smp else 0.0)
+                   smp[0] if smp else 0.0, imp_j / J_PER_KWH, exp_j / J_PER_KWH,
+                   g_batt / J_PER_KWH, g_dev / J_PER_KWH)
     return res
 
 

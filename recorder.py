@@ -42,10 +42,13 @@ CREATE TABLE IF NOT EXISTS minutes (
 CREATE TABLE IF NOT EXISTS history_days (
     day TEXT PRIMARY KEY, fetched INTEGER, complete INTEGER
 );
--- Finished half-hour home energy estimates (see estimate.py), so long ranges draw quickly.
-CREATE TABLE IF NOT EXISTS energy_hh (
+-- Finished half-hour home energy estimates (see estimate.FIELDS), so long ranges draw quickly. It's only a
+-- cache: when its columns change it gets a new name and the old one is dropped.
+DROP TABLE IF EXISTS energy_hh;
+CREATE TABLE IF NOT EXISTS energy_hh2 (
     hh INTEGER PRIMARY KEY,
-    home REAL, grid REAL, var REAL, covered REAL, measured REAL, sampled REAL
+    home REAL, grid REAL, var REAL, covered REAL, measured REAL, sampled REAL,
+    imp REAL, exp REAL, grid_batt REAL, grid_dev REAL
 );
 """
 
@@ -207,7 +210,7 @@ class Store:
             c.execute("INSERT OR REPLACE INTO history_days VALUES (?, ?, ?)",
                       (day, int(now or time.time()), 1 if complete else 0))
             start = int(datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
-            c.execute("DELETE FROM energy_hh WHERE hh >= ? AND hh < ?", (start, start + 86400))
+            c.execute("DELETE FROM energy_hh2 WHERE hh >= ? AND hh < ?", (start, start + 86400))
 
     def history_days(self):
         return {d: (f, bool(cp)) for d, f, cp in self._conn().execute("SELECT * FROM history_days")}
@@ -233,17 +236,17 @@ class Store:
     # -- cached half-hour estimates ------------------------------------------
     def cached_hh(self, start_ts, end_ts):
         return {r[0]: r[1:] for r in self._conn().execute(
-            "SELECT hh, home, grid, var, covered, measured, sampled FROM energy_hh WHERE hh >= ? AND hh < ?",
-            (int(start_ts), int(end_ts)))}
+            "SELECT hh, home, grid, var, covered, measured, sampled, imp, exp, grid_batt, grid_dev "
+            "FROM energy_hh2 WHERE hh >= ? AND hh < ?", (int(start_ts), int(end_ts)))}
 
     def cache_hh(self, rows):
         with self._conn() as c:
-            c.executemany("INSERT OR REPLACE INTO energy_hh VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
+            c.executemany("INSERT OR REPLACE INTO energy_hh2 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
 
     def prune(self, before_ts):
         with self._conn() as c:
             c.execute("DELETE FROM minutes WHERE ts < ?", (int(before_ts),))
-            c.execute("DELETE FROM energy_hh WHERE hh < ?", (int(before_ts),))
+            c.execute("DELETE FROM energy_hh2 WHERE hh < ?", (int(before_ts),))
             c.execute("DELETE FROM history_days WHERE day < ?", (_utc(before_ts).strftime("%Y-%m-%d"),))
             c.execute("DELETE FROM flows WHERE poll < ?", (int(before_ts),))
             return c.execute("DELETE FROM readings WHERE poll < ?", (int(before_ts),)).rowcount

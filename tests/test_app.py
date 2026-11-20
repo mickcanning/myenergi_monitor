@@ -602,6 +602,7 @@ def test_energy_page(tmp_path):
     assert "Home energy use" in html and "Running total" in html and "Per half hour" in html
     # this data imports 4 kW against 4 kW of demand (home, hot water, battery charging): all from the grid
     assert "From solar &amp; battery" in html and 'class="bar grid' in html and 'class="bar solar' not in html
+    assert "Imported from the grid" in html and 'class="eplot imports"' in html and 'class="ibar home"' in html
     assert 'class="on" aria-current="true">Day' in html and 'class="eplot cum"' in html
     for p in ("week", "month", "year"):
         assert c.get(f"/energy?period={p}").status_code == 200
@@ -623,13 +624,15 @@ def test_estimate_combines_measured_and_sampled(tmp_path):
     # the hub measured 1.5 kW import and 0.5 kW to the Eddi every minute of the first 50 minutes
     st.save_minutes("2026-11-18", [(m, 1500 * 60, 0, 500 * 60) for m in range(t0, t0 + 3000, 60)], complete=False)
     hh = estimate.compute(st, t0, t0 + 3600)
-    home, grid, var, covered, measured, sampled = hh[t0]
+    home, grid, var, covered, measured, sampled, imp, exp_, g_batt, g_dev = hh[t0]
+    assert abs(imp - 0.75) < 1e-9 and exp_ == 0 and g_batt == 0
+    assert abs(g_dev - 0.15) < 0.01 and abs(grid + g_batt + g_dev - imp) < 0.01   # import fully accounted for
     assert abs(home - 1.0) < 0.01                       # 1.5 kW + 1 kW solar - 0.5 kW Eddi = 2 kW for 30 min
     assert abs(grid - 0.6) < 0.01                       # 1.5 kW of the 2.5 kW demand came from the grid
     assert covered == measured == 1800                  # the polling gap is filled by interpolation
     # sampled only: 1.9 kW for the ~25 minutes polled (the reading before the gap counts for up to 60 s)
     assert 0 < estimate.ci95(var) < 0.05 and 1.9 * 25 / 60 < sampled < 1.9 * 26.5 / 60
-    home2, _, _, covered2, measured2, _ = hh[t0 + 1800]
+    home2, _, _, covered2, measured2 = hh[t0 + 1800][:5]
     assert covered2 == 1800 and measured2 == 1200       # last 10 minutes: no measured data yet -> samples
     assert abs(home2 - (2.0 * 20 + 1.9 * 10) / 60) < 0.01
     # no variation in the solar readings -> no sampling error
@@ -679,6 +682,25 @@ def test_history_sync(tmp_path):
     assert rec.sync_history(status, now + 600) == [_day(now)] and len(calls) == 2   # only today again
 
 
+def test_estimate_overnight_battery_charging(tmp_path):
+    """Off-peak: 3.9 kW imported while the battery charges at 3.4 kW -> the home used 0.5 kW."""
+    import estimate, recorder
+    st = recorder.Store(tmp_path / "night.db")
+    t0 = 1795000000 // 1800 * 1800
+    with st._conn() as c:
+        c.executemany("INSERT INTO flows VALUES (?, ?, ?, ?, ?, ?)",
+                      [(t, 3900, -3400, 0, 0, 500) for t in range(t0, t0 + 1800, 15)])
+    st.save_minutes("2026-11-18", [(m, 3900 * 60, 0, 0) for m in range(t0, t0 + 1800, 60)], complete=False)
+    st.save_minutes("2026-11-17", [(m, 1000 * 60, 0, 0) for m in range(t0 - 1800, t0, 60)], complete=False)
+    hh = estimate.compute(st, t0 - 1800, t0 + 1800)
+    home, grid, _, _, _, _, imp, _, g_batt, g_dev = hh[t0]
+    assert abs(imp - 1.95) < 1e-9 and abs(home - 0.25) < 1e-6 and abs(grid - 0.25) < 1e-6
+    assert abs(g_batt - 1.7) < 1e-6 and g_dev == 0
+    # before recording started there's measured import but no solar & battery reading: counted, not attributed
+    before = hh[t0 - 1800]
+    assert abs(before[6] - 0.5) < 1e-9 and before[0] == before[1] == before[8] == 0 and before[3] == 0
+
+
 if __name__ == "__main__":
     import tempfile
     for fn in (test_dashboard_and_api, test_upload_and_report, test_current_report_persists,
@@ -687,7 +709,7 @@ if __name__ == "__main__":
                test_stored_report, test_stored_report_long_range_and_empty, test_live_chart_from_recorded_data,
                test_stored_report_with_recording_gap, test_overview_page, test_energy_buckets_and_totals,
                test_flow_recording_and_backfill, test_energy_page, test_estimate_combines_measured_and_sampled,
-               test_history_sync):
+               test_history_sync, test_estimate_overnight_battery_charging):
         with tempfile.TemporaryDirectory() as d:
             fn(Path(d))
             print("ok", fn.__name__)

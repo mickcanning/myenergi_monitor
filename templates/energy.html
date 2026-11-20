@@ -46,6 +46,30 @@
   </div>
 </div>
 
+{% set im = s.imports %}
+{% if im.imp >= 0.005 or im.exp >= 0.005 %}
+<section class="import-card" aria-label="Grid import">
+  <div class="import-head">
+    <span><span class="stat-label">Imported from the grid</span>
+      <b class="import-total">{{ '%.1f' % im.imp }} <small>kWh</small></b></span>
+    <span class="muted">Exported {{ '%.1f' % im.exp }} kWh · measured by the hub, as in the myenergi app</span>
+  </div>
+  {% if im.imp >= 0.005 %}
+  {% set parts = [('home', 'Used by the home', im.home), ('batt', 'Charged the battery', im.batt),
+                  ('dev', 'Hot water & car', im.dev), ('unattr', 'Not attributed', im.unattr)] %}
+  <div class="import-bar" role="img" aria-label="{% for k, label, v in parts if v >= 0.005 %}{{ label }} {{ '%.1f' % v }} kWh{{ ', ' if not loop.last }}{% endfor %}">
+    {% for k, label, v in parts if v / im.imp >= 0.003 %}<span class="{{ k }}" style="width:{{ v / im.imp * 100 }}%"></span>{% endfor %}
+  </div>
+  <ul class="import-legend">
+    {% for k, label, v in parts if v >= 0.005 or k == 'home' or k == 'batt' %}
+    <li><i class="{{ k }}"></i>{{ label }} <b>{{ '%.1f' % v }} kWh</b> <span class="muted">{{ '%.0f' % (v / im.imp * 100) }}%</span></li>
+    {% endfor %}
+  </ul>
+  {% if im.unattr >= 0.05 %}<p class="muted small-note">Not attributed: import at times we have no solar &amp; battery reading for (before recording started, or long polling gaps), so we can't tell where it went.</p>{% endif %}
+  {% endif %}
+</section>
+{% endif %}
+
 {% if s.total == 0 and s.coverage == 0 %}
 <p class="muted">No readings were recorded in this period.</p>
 {% else %}
@@ -79,6 +103,18 @@
     </svg>
     <div class="band" hidden></div>
   </div>
+  <div class="panel-title">Grid import per {{ s.bucket_word }} <span class="muted">kWh</span>
+    <span class="legend"><span><i class="home"></i>Home</span><span><i class="batt"></i>Battery</span>{% if s.imports.dev >= 0.005 %}<span><i class="dev"></i>Hot water &amp; car</span>{% endif %}{% if s.imports.unattr >= 0.005 %}<span><i class="unattr"></i>Not attributed</span>{% endif %}</span>
+  </div>
+  <div class="eplot imports">
+    {% for t in ch.imp_ticks %}<span class="ytick" style="top:{{ t.y }}%">{{ t.text }}</span>{% endfor %}
+    <svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
+      {% for t in ch.imp_ticks %}<line class="grid" x1="0" x2="1000" y1="{{ t.y }}" y2="{{ t.y }}"/>{% endfor %}
+      {% for b in ch.imp_bars %}{% for p in b.parts %}<rect class="ibar {{ p.cls }}" x="{{ b.x }}" y="{{ p.y }}" width="{{ b.w }}" height="{{ p.h }}"/>{% endfor %}{% endfor %}
+      <line class="axis" x1="0" x2="1000" y1="100" y2="100"/>
+    </svg>
+    <div class="band" hidden></div>
+  </div>
   <div class="xaxis">{% for l in ch.xlabels %}<span {% if l.minor %}class="minor" {% endif %}style="left:{{ l.x }}%">{{ l.text }}</span>{% endfor %}</div>
   <div class="tip" hidden></div>
   <figcaption class="muted">
@@ -93,12 +129,13 @@
 <details class="panel energy-table">
   <summary>Show as a table</summary>
   <div class="table-scroll"><table>
-    <thead><tr><th>{{ s.bucket_word | capitalize }}</th><th class="num">Estimated kWh</th><th class="num">± (95%)</th><th class="num">Solar &amp; battery</th><th class="num">Grid</th><th class="num">Running total</th><th class="num">Sampled only</th><th class="num">Hub-measured</th></tr></thead>
+    <thead><tr><th>{{ s.bucket_word | capitalize }}</th><th class="num">Estimated kWh</th><th class="num">± (95%)</th><th class="num">Solar &amp; battery</th><th class="num">Grid</th><th class="num">Running total</th><th class="num">Sampled only</th><th class="num">Imported</th><th class="num">→ battery</th><th class="num">Exported</th><th class="num">Hub-measured</th></tr></thead>
     <tbody>
     {% for r in s.rows if r.kwh is not none %}
       <tr><td>{{ r.long }}</td><td class="num">{{ '%.2f' % r.kwh }}</td><td class="num muted">{{ '%.2f' % r.err }}</td>
           <td class="num">{{ '%.2f' % r.solar }}</td><td class="num">{{ '%.2f' % r.grid }}</td><td class="num">{{ '%.2f' % r.cum }}</td>
-          <td class="num">{{ '%.2f' % r.sampled }}</td><td class="num">{{ '%.0f%%' % (r.measured * 100) }}</td></tr>
+          <td class="num">{{ '%.2f' % r.sampled }}</td><td class="num">{{ '%.2f' % r.imp }}</td><td class="num">{{ '%.2f' % r.imp_batt }}</td>
+          <td class="num">{{ '%.2f' % r.exp }}</td><td class="num">{{ '%.0f%%' % (r.measured * 100) }}</td></tr>
     {% endfor %}
     </tbody>
   </table></div>
@@ -126,6 +163,12 @@
         `<div class="row-grid"><i></i>Grid <b>${fmt(d.g)}</b></div>` +
         `<div class="muted">Running total ${fmt(d.c)}${d.ce >= 0.05 ? " ± " + d.ce.toFixed(1) : ""}</div>` +
         `<div class="muted">Sampled only: ${fmt(d.m)}</div>` +
+        (d.i && d.i[0] >= 0.005 ? `<div class="tip-gap">Imported <b>${fmt(d.i[0])}</b></div>` +
+          `<div class="row-home"><i></i>to home <b>${fmt(d.i[2])}</b></div>` +
+          `<div class="row-batt"><i></i>to battery <b>${fmt(d.i[3])}</b></div>` +
+          (d.i[4] >= 0.005 ? `<div class="row-dev"><i></i>to hot water &amp; car <b>${fmt(d.i[4])}</b></div>` : "") +
+          (d.i[5] >= 0.005 ? `<div class="row-unattr"><i></i>not attributed <b>${fmt(d.i[5])}</b></div>` : "") : "") +
+        (d.i && d.i[1] >= 0.005 ? `<div class="muted">Exported ${fmt(d.i[1])}</div>` : "") +
         (d.p != null && d.p < 90 ? `<div class="muted">Data for ${d.p}% of this ${word}</div>` :
          d.ms != null && d.ms < 90 ? `<div class="muted">Hub-measured for ${d.ms}% of this ${word}</div>` : ""));
       tip.hidden = false;

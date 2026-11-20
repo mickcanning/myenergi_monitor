@@ -210,3 +210,27 @@ button.secondary { background:var(--card); color:var(--ink); border:1px solid va
 .eplot .err { fill:none; stroke:var(--ink); stroke-opacity:.55; stroke-width:1.2; vector-effect:non-scaling-stroke; }
 .table-scroll { overflow-x:auto; }
 .energy-table td.muted { font-size:inherit; }
+/* Grid import: where the imported energy went. Home = the grid part of the home's use (same orange). */
+.energy-chart, .import-card { --imp-home:#c2410c; --imp-batt:#6d28d9; --imp-dev:#0891b2; --imp-unattr:#b8b7b2; }
+:root[data-theme="dark"] .energy-chart, :root[data-theme="dark"] .import-card { --imp-home:#f29a55; --imp-batt:#a78bfa; --imp-dev:#22d3ee; --imp-unattr:#6b6a65; }
+.eplot.imports { height:110px; margin-bottom:0 !important; }
+.eplot.bars { margin-bottom:1.1rem !important; }
+.eplot .ibar.home { fill:var(--imp-home); } .eplot .ibar.batt { fill:var(--imp-batt); }
+.eplot .ibar.dev { fill:var(--imp-dev); } .eplot .ibar.unattr { fill:var(--imp-unattr); }
+.energy-chart .legend i.home, .import-legend i.home, .import-bar .home, .energy-chart .row-home i { background:var(--imp-home); }
+.energy-chart .legend i.batt, .import-legend i.batt, .import-bar .batt, .energy-chart .row-batt i { background:var(--imp-batt); }
+.energy-chart .legend i.dev, .import-legend i.dev, .import-bar .dev, .energy-chart .row-dev i { background:var(--imp-dev); }
+.energy-chart .legend i.unattr, .import-legend i.unattr, .import-bar .unattr, .energy-chart .row-unattr i { background:var(--imp-unattr); }
+.energy-chart .tip-gap { margin-top:.3rem; padding-top:.3rem; border-top:1px solid var(--line); }
+.import-card { border:1px solid var(--line); border-radius:8px; background:var(--card); padding:.7rem .9rem; margin:0 0 1rem; }
+.import-head { display:flex; flex-wrap:wrap; align-items:baseline; gap:.2rem 1rem; justify-content:space-between; }
+.import-head > span:first-child { display:flex; align-items:baseline; gap:.6rem; }
+.import-total { font-size:1.3rem; font-variant-numeric:tabular-nums; }
+.import-total small { font-size:.65em; font-weight:500; color:var(--ink2); }
+.import-bar { display:flex; gap:2px; height:12px; margin:.6rem 0 .5rem; border-radius:4px; overflow:hidden; background:var(--line); }
+.import-bar span { display:block; height:100%; }
+.import-legend { list-style:none; margin:0; padding:0; display:flex; flex-wrap:wrap; gap:.2rem 1.4rem; font-size:.85em; }
+.import-legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:.35rem; vertical-align:-1px; }
+.import-legend b { font-variant-numeric:tabular-nums; margin-left:.2rem; }
+.small-note { font-size:.78em; margin:.4rem 0 0; }
+@media (max-width: 560px) { .eplot.imports { height:90px; } }
