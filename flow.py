@@ -12,8 +12,15 @@ Values:
   home     what's left: grid + solar - eddi - zappi (an estimate: nothing measures the home directly)
 """
 import math
+from datetime import datetime, timezone
+
+from devices import parse_ts
 
 IDLE_W = 20            # below this a link is drawn as idle
+# A Harvi powers itself from the current through its clamp, so it falls silent when that current stops, and
+# the API keeps returning its last reading. A solar & battery reading older than this is taken as ~0 W
+# (e.g. the battery stopped charging at 02:00 but the Harvi's last report still said -3 kW until 05:00).
+SOLAR_STALE_S = 300
 
 EDDI_STATES = {0: "Starting", 1: "Waiting for surplus", 2: "Grid demand response", 3: "Heating",
                4: "Boosting", 5: "Tank at max temperature", 6: "Stopped"}
@@ -86,13 +93,33 @@ def _hub(status):
     return {}
 
 
-def compute(status):
+def _solar_age(status, now):
+    """Seconds since the newest report among the devices whose CTs measure solar & battery, or None."""
+    ages = []
+    for recs in status.values():
+        for r in recs if isinstance(recs, list) else []:
+            if not isinstance(r, dict):
+                continue
+            if any(("generation" in str(r.get(f"ectt{i}", "")).lower() or "battery" in str(r.get(f"ectt{i}", "")).lower())
+                   and r.get(f"ectp{i}") is not None for i in range(1, 7)):
+                ts = parse_ts(r)
+                if ts:
+                    ages.append((now - ts).total_seconds())
+    return min(ages) if ages else None
+
+
+def compute(status, now=None):
     """The numbers behind the Overview, independent of layout."""
+    now = now or datetime.now(timezone.utc)
     hub = _hub(status)
     grid = _cts(status, lambda n: n == "grid")
     if grid is None:
         grid = _num(hub.get("grd"))
     solar = _cts(status, lambda n: "generation" in n or "battery" in n)
+    solar_age = _solar_age(status, now)
+    solar_stale = solar is not None and solar_age is not None and solar_age > SOLAR_STALE_S
+    if solar_stale:
+        solar = 0.0
     solar_has_battery = any("battery" in str(r.get(f"ectt{i}", "")).lower()
                             for recs in status.values() if isinstance(recs, list)
                             for r in recs if isinstance(r, dict) for i in range(1, 7))
@@ -110,7 +137,8 @@ def compute(status):
     if grid is not None and used >= IDLE_W:
         self_pct = round(100 * min(1.0, max(0.0, 1 - max(grid, 0) / used)))
 
-    return {"grid": grid, "solar": solar, "solar_has_battery": solar_has_battery, "eddi": eddi,
+    return {"grid": grid, "solar": solar, "solar_age": solar_age, "solar_stale": solar_stale,
+            "solar_has_battery": solar_has_battery, "eddi": eddi,
             "zappi": zappi, "home": home, "self_pct": self_pct,
             "eddi_rec": eddis[0] if eddis else None, "zappi_rec": zappis[0] if zappis else None}
 
@@ -167,7 +195,9 @@ def build(status):
 
     if v["solar"] is not None:
         s = v["solar"]
-        if s <= -IDLE_W:
+        if v["solar_stale"]:
+            cap = "Idle (Harvi quiet)"
+        elif s <= -IDLE_W:
             cap = "Battery charging"
         elif s >= IDLE_W:
             cap = "Generating"

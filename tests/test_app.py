@@ -538,7 +538,7 @@ def test_energy_buckets_and_totals(tmp_path):
     day0 = dt(2026, 3, 28, tzinfo=tz).timestamp()          # Sat 28 Mar; clocks go forward on Sun 29 Mar
     rows = [(int(t), 0, 0, 0, 0, 1000.0) for t in range(int(day0), int(day0) + 3 * 86400, 15)]   # 1 kW flat
     with st._conn() as c:
-        c.executemany("INSERT INTO flows VALUES (?, ?, ?, ?, ?, ?)", rows)
+        c.executemany("INSERT INTO flows (poll, grid, solar, eddi, zappi, home) VALUES (?, ?, ?, ?, ?, ?)", rows)
     now = day0 + 3 * 86400 + 3600
     s = energy.summarise(st, "day", date(2026, 3, 28), tz, now)
     assert len(s["rows"]) == 48 and abs(s["total"] - 24) < 0.01 and s["rows"][0]["label"] == "00:00"
@@ -563,7 +563,7 @@ def test_energy_buckets_and_totals(tmp_path):
     st2 = recorder.Store(tmp_path / "split.db")
     t1 = int(dt(2026, 6, 1, tzinfo=tz).timestamp())
     with st2._conn() as c:
-        c.executemany("INSERT INTO flows VALUES (?, ?, ?, ?, ?, ?)",
+        c.executemany("INSERT INTO flows (poll, grid, solar, eddi, zappi, home) VALUES (?, ?, ?, ?, ?, ?)",
                       [(t, 500, 1500, 1000, 0, 1000) for t in range(t1, t1 + 3600, 15)] +
                       [(t, 1500, -1000, 1000, 0, 1000) for t in range(t1 + 3600, t1 + 7200, 15)] +
                       [(t, None, 0, 0, 0, 1000) for t in range(t1 + 7200, t1 + 10800, 15)])
@@ -622,7 +622,7 @@ def test_estimate_combines_measured_and_sampled(tmp_path):
     rows = [(t, 1400, 800 if (t // 15) % 2 else 1200, 500, 0, 1900) for t in range(t0, t0 + 3600, 15)
             if not (t0 + 600 <= t < t0 + 900)]                       # a 5-minute polling gap
     with st._conn() as c:
-        c.executemany("INSERT INTO flows VALUES (?, ?, ?, ?, ?, ?)", rows)
+        c.executemany("INSERT INTO flows (poll, grid, solar, eddi, zappi, home) VALUES (?, ?, ?, ?, ?, ?)", rows)
     # the hub measured 1.5 kW import and 0.5 kW to the Eddi every minute of the first 50 minutes
     st.save_minutes("2026-11-18", [(m, 1500 * 60, 0, 500 * 60, None, None) for m in range(t0, t0 + 3000, 60)], complete=False)
     hh = estimate.compute(st, t0, t0 + 3600)
@@ -660,7 +660,7 @@ def test_history_sync(tmp_path):
     st = recorder.Store(tmp_path / "h.db")
     now = 1795000000
     with st._conn() as c:
-        c.execute("INSERT INTO flows VALUES (?, 0, 0, 0, 0, 0)", (now - 2 * 86400,))   # recording began 2 days ago
+        c.execute("INSERT INTO flows (poll, grid, solar, eddi, zappi, home) VALUES (?, 0, 0, 0, 0, 0)", (now - 2 * 86400,))   # recording began 2 days ago
     calls = []
 
     def history(kind, sno, day):
@@ -691,7 +691,7 @@ def test_estimate_overnight_battery_charging(tmp_path):
     st = recorder.Store(tmp_path / "night.db")
     t0 = 1795000000 // 1800 * 1800
     with st._conn() as c:
-        c.executemany("INSERT INTO flows VALUES (?, ?, ?, ?, ?, ?)",
+        c.executemany("INSERT INTO flows (poll, grid, solar, eddi, zappi, home) VALUES (?, ?, ?, ?, ?, ?)",
                       [(t, 3900, -3400, 0, 0, 500) for t in range(t0, t0 + 1800, 15)])
     st.save_minutes("2026-11-18", [(m, 3900 * 60, 0, 0, 0, 0) for m in range(t0, t0 + 1800, 60)], complete=False)
     st.save_minutes("2026-11-17", [(m, 1000 * 60, 0, 0, 0, 0) for m in range(t0 - 1800, t0, 60)], complete=False)
@@ -719,6 +719,46 @@ def test_minutes_table_upgrade(tmp_path):
     assert st.minutes(0, 120) == {60: (1, 2, 3, None, None)} and st.history_days() == {}
 
 
+def test_quiet_solar_harvi_counts_as_zero(tmp_path):
+    """Replays 20 Nov 02:00-05:00: charging stopped, but the Generation & Battery Harvi went quiet and the API
+    kept returning its last reading (-3013 W) for hours while the hub measured ~750 W of import."""
+    from datetime import datetime as dt, timezone as tz
+    import estimate, flow, recorder
+    now = dt(2026, 11, 20, 3, 0, tzinfo=tz.utc)
+    stamp = lambda d: {"dat": d.strftime("%d-%m-%Y"), "tim": d.strftime("%H:%M:%S")}
+    status = {"eddi": [{"sno": 1, "isVHubEnabled": True, "grd": 750, "div": 0, **stamp(now)}],
+              "harvi": [{"sno": 218, "ectp1": 750, "ectt1": "Grid", **stamp(now)},
+                        {"sno": 227, "ectp1": -3013, "ectt1": "Generation & Battery",
+                         **stamp(dt(2026, 11, 20, 2, 0, tzinfo=tz.utc))}]}
+    v = flow.compute(status, now=now)
+    assert v["solar_stale"] and v["solar"] == 0 and v["home"] == 750 and v["solar_age"] == 3600
+    assert {n["key"]: n for n in flow.build(status)["nodes"]}["solar"]["caption"] == ["Idle (Harvi quiet)"]
+    status["harvi"][1].update(stamp(now))                               # a fresh report is trusted
+    assert flow.compute(status, now=now)["solar"] == -3013
+
+    # history recorded before the fix: corrected once from the stored report ages
+    st = recorder.Store(tmp_path / "q.db")
+    t0 = int(now.timestamp())
+    with st._conn() as c:
+        c.executemany("INSERT INTO flows (poll, grid, solar, eddi, zappi, home) VALUES (?, 750, -3013, 0, 0, 0)",
+                      [(t0 + i * 15,) for i in range(4)])
+        c.executemany("INSERT INTO readings VALUES (?, 'harvi', '227', ?, ?, -3013, 0, 0)",
+                      [(t0 + i * 15, t0 - 3600, 3600 + i * 15) for i in range(4)])
+    status["harvi"][1].update(sno=227)
+    assert st.fix_stale_solar(status) == 4 and st.fix_stale_solar(status) == 0
+    assert st._conn().execute("SELECT DISTINCT solar, home FROM flows").fetchall() == [(0.0, 750.0)]
+
+    # a reading only a minute or two old that contradicts the measured import is also taken as 0
+    st2 = recorder.Store(tmp_path / "q2.db")
+    hh = t0 // 1800 * 1800
+    with st2._conn() as c:
+        c.executemany("INSERT INTO flows VALUES (?, 750, -3013, 0, 0, 0, ?)",
+                      [(t, 90 + (t - hh) % 60) for t in range(hh, hh + 1800, 15)])
+    st2.save_minutes("2026-11-20", [(m, 750 * 60, 0, 0, 0, 0) for m in range(hh, hh + 1800, 60)], complete=False)
+    home, _, _, _, _, _, imp, _, g_batt, _, _, _, charge = estimate.compute(st2, hh, hh + 1800)[hh]
+    assert abs(home - 0.375) < 1e-6 and charge == 0 and g_batt == 0 and abs(imp - 0.375) < 1e-9
+
+
 if __name__ == "__main__":
     import tempfile
     for fn in (test_dashboard_and_api, test_upload_and_report, test_current_report_persists,
@@ -727,7 +767,8 @@ if __name__ == "__main__":
                test_stored_report, test_stored_report_long_range_and_empty, test_live_chart_from_recorded_data,
                test_stored_report_with_recording_gap, test_overview_page, test_energy_buckets_and_totals,
                test_flow_recording_and_backfill, test_energy_page, test_estimate_combines_measured_and_sampled,
-               test_history_sync, test_estimate_overnight_battery_charging, test_minutes_table_upgrade):
+               test_history_sync, test_estimate_overnight_battery_charging, test_minutes_table_upgrade,
+               test_quiet_solar_harvi_counts_as_zero):
         with tempfile.TemporaryDirectory() as d:
             fn(Path(d))
             print("ok", fn.__name__)

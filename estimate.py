@@ -21,6 +21,7 @@ from bisect import bisect_left, bisect_right
 from statistics import pvariance
 
 HH = 1800
+SUSPECT_AGE_S = 60          # a solar reading this old that contradicts the measured import is taken as 0 W
 INTERP_MAX_S = 1800            # fill gaps in the solar samples up to this long; longer gaps stay unknown
 J_PER_KWH = 3.6e6
 
@@ -101,6 +102,11 @@ def _compute_chunk(store, start, end):
                 exp_j += meas[1] or 0
             if meas is not None and meas[0] is not None and s_w is not None:
                 imp, exp_, div = (x / 60 for x in (meas[0], meas[1] or 0, meas[2] or 0))
+                # A Harvi that has gone quiet keeps its last reading. If that reading is getting old and says the
+                # battery is charging harder than the measured import could supply, it has most likely stopped.
+                if s_w < 0 and imp - exp_ + s_w - div < 0 and any(
+                        (x[6] or 0) > SUSPECT_AGE_S for x in here):
+                    s_w, s_var = 0.0, 0.0
                 h = max(0.0, imp - exp_ + s_w - div)
                 charge = max(-s_w, 0.0)
                 demand = h + div + charge

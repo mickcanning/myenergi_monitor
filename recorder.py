@@ -30,7 +30,8 @@ CREATE INDEX IF NOT EXISTS readings_device ON readings (device, sno, poll);
 -- The power-flow figures behind the Overview, one row per poll (W; NULL when not measured).
 CREATE TABLE IF NOT EXISTS flows (
     poll  INTEGER PRIMARY KEY,
-    grid  REAL, solar REAL, eddi REAL, zappi REAL, home REAL
+    grid  REAL, solar REAL, eddi REAL, zappi REAL, home REAL,
+    solar_age REAL      -- seconds since the solar & battery Harvi last reported (see flow.SOLAR_STALE_S)
 );
 -- The hub's own per-minute energy history (joules, measured continuously rather than sampled):
 -- grid import/export, and what the Eddi and Zappi diverted or boosted.
@@ -80,6 +81,9 @@ class Store:
         self._local = threading.local()
         c = self._conn()
         c.executescript(SCHEMA)
+        if "solar_age" not in {r[1] for r in c.execute("PRAGMA table_info(flows)")}:
+            with c:
+                c.execute("ALTER TABLE flows ADD COLUMN solar_age REAL")
         cols = {r[1] for r in c.execute("PRAGMA table_info(minutes)")}
         if "eddi" not in cols:          # older database: keep the Eddi and Zappi apart from now on
             with c:
@@ -141,8 +145,8 @@ class Store:
 
     def insert_flow(self, poll_ts, v):
         with self._conn() as c:
-            c.execute("INSERT OR REPLACE INTO flows VALUES (?, ?, ?, ?, ?, ?)",
-                      (int(poll_ts), v["grid"], v["solar"], v["eddi"], v["zappi"], v["home"]))
+            c.execute("INSERT OR REPLACE INTO flows VALUES (?, ?, ?, ?, ?, ?, ?)",
+                      (int(poll_ts), v["grid"], v["solar"], v["eddi"], v["zappi"], v["home"], v.get("solar_age")))
 
     def backfill_flows(self, status):
         """Work out flows for polls recorded before the flows table existed, from the stored CT readings.
@@ -175,7 +179,8 @@ class Store:
                 v = flow.compute(st)
                 out.append((poll, v["grid"], v["solar"], v["eddi"], v["zappi"], v["home"]))
             with self._conn() as cc:
-                cc.executemany("INSERT OR IGNORE INTO flows VALUES (?, ?, ?, ?, ?, ?)", out)
+                cc.executemany("INSERT OR IGNORE INTO flows (poll, grid, solar, eddi, zappi, home) "
+                               "VALUES (?, ?, ?, ?, ?, ?)", out)
             added += len(out)
             polls.clear()
 
@@ -187,6 +192,35 @@ class Store:
         if polls:
             flush()
         return added
+
+    def fix_stale_solar(self, status):
+        """Fill in solar_age for flows recorded without it, from the stored Harvi report ages, and treat
+        long-stale solar & battery readings as 0 W (recomputing home). Returns rows corrected."""
+        c = self._conn()
+        if c.execute("SELECT 1 FROM flows WHERE solar_age IS NULL LIMIT 1").fetchone() is None:
+            return 0
+        snos = [(kind, str(r["sno"])) for kind, recs in status.items() for r in (recs if isinstance(recs, list) else [])
+                if isinstance(r, dict) and "sno" in r and any(
+                    "generation" in str(r.get(f"ectt{i}", "")).lower() or "battery" in str(r.get(f"ectt{i}", "")).lower()
+                    for i in range(1, 7))]
+        if not snos:
+            with c:
+                c.execute("UPDATE flows SET solar_age = -1 WHERE solar_age IS NULL")     # nothing to check
+            return 0
+        marks = " OR ".join("(r.device = ? AND r.sno = ?)" for _ in snos)
+        args = [x for pair in snos for x in pair]
+        fixed = 0
+        with c:
+            c.execute(f"""UPDATE flows SET solar_age = (
+                              SELECT MIN(r.age) FROM readings r WHERE r.poll = flows.poll AND ({marks}))
+                          WHERE solar_age IS NULL""", args)
+            fixed = c.execute(
+                "UPDATE flows SET solar = 0, home = MAX(0, COALESCE(grid, 0) - COALESCE(eddi, 0) - COALESCE(zappi, 0)) "
+                "WHERE solar_age > ? AND solar IS NOT NULL AND solar != 0", (flow.SOLAR_STALE_S,)).rowcount
+            c.execute("UPDATE flows SET solar_age = -1 WHERE solar_age IS NULL")
+            if fixed:
+                c.execute("DELETE FROM energy_hh3")              # recompute the energy figures
+        return fixed
 
     def energy_by_half_hour(self, start_ts, end_ts):
         """{half-hour start (unix s): (home kWh, of which from the grid kWh, seconds covered)} for [start, end).
@@ -238,7 +272,7 @@ class Store:
 
     def flow_samples(self, start_ts, end_ts):
         return self._conn().execute(
-            "SELECT poll, grid, solar, eddi, zappi, home FROM flows WHERE poll >= ? AND poll < ? ORDER BY poll",
+            "SELECT poll, grid, solar, eddi, zappi, home, solar_age FROM flows WHERE poll >= ? AND poll < ? ORDER BY poll",
             (int(start_ts), int(end_ts))).fetchall()
 
     def first_flow_poll(self):
@@ -286,7 +320,7 @@ class Recorder(threading.Thread):
         try:
             status = self.get_status()
             self.store.insert(now, summarise(status, now=_utc(now)))
-            self.store.insert_flow(now, flow.compute(status))
+            self.store.insert_flow(now, flow.compute(status, now=_utc(now)))
             self.last_ok, self.latest = now, (now, status)
             if self.get_history and now - self._last_history >= self.HISTORY_EVERY_S:
                 self._last_history = now
@@ -300,6 +334,9 @@ class Recorder(threading.Thread):
                     n = self.store.backfill_flows(status)
                     if n:
                         log.info("recorder: worked out power flows for %s earlier polls", n)
+                    n = self.store.fix_stale_solar(status)
+                    if n:
+                        log.info("recorder: treated %s stale solar & battery readings as 0 W", n)
                 except sqlite3.Error as e:
                     log.warning("recorder: flow backfill failed: %s", e)
         except Exception as e:                       # keep recording through API or network hiccups
