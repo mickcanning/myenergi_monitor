@@ -21,9 +21,10 @@
     <strong>myenergi monitor</strong>
     <nav>
       {% if request.endpoint != 'login' %}
-      <a href="{{ url_for('overview') }}" {% if request.endpoint in ('overview', 'energy_page') %}class="on"{% endif %}>Overview</a>
+      <a href="{{ url_for('overview') }}" {% if request.endpoint == 'overview' %}class="on"{% endif %}>Overview</a>
+      <a href="{{ url_for('energy_page') }}" {% if request.endpoint == 'energy_page' %}class="on"{% endif %}>Energy</a>
       <a href="{{ url_for('dashboard') }}" {% if request.endpoint == 'dashboard' %}class="on"{% endif %}>Live values</a>
-      <a href="{{ report_link }}" {% if request.endpoint in ('upload', 'report', 'stored_report') %}class="on"{% endif %}>Graphs</a>
+      <a href="{{ report_link }}" {% if request.endpoint in ('upload', 'report', 'stored_report') %}class="on"{% endif %}>Harvi health</a>
       {% endif %}
     </nav>
     <label class="theme-pick">Theme

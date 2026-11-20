@@ -1,7 +1,7 @@
 {% extends "base.html" %}
-{% block title %}Graphs · myenergi monitor{% endblock %}
+{% block title %}Harvi health · myenergi monitor{% endblock %}
 {% block content %}
-<h1>Graphs</h1>
+<h1>Harvi health</h1>
 <p><a href="{{ url_for('stored_report') }}">Report on recorded data</a> &middot; this app records continuously, so uploading is only needed for logs from elsewhere.</p>
 <p>Upload a CSV written by <code>monitor.py</code> to draw the Harvi report-age charts.</p>
 {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}

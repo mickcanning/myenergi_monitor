@@ -1,7 +1,7 @@
 {% extends "base.html" %}
-{% block title %}Graphs · myenergi monitor{% endblock %}
+{% block title %}Harvi health · myenergi monitor{% endblock %}
 {% block content %}
-<h1>Graphs</h1>
+<h1>Harvi health</h1>
 <p class="muted">{% include "_recording.html" %}</p>
 {% if rng %}
 <p>No Harvi readings in the chosen range yet. <a href="{{ url_for('stored_report') }}">Show the last 24 hours</a></p>

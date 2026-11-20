@@ -144,7 +144,7 @@ button.secondary { background:var(--card); color:var(--ink); border:1px solid va
 .dot.fresh { background:var(--good); } .dot.delayed { background:var(--warn-line); } .dot.silent { background:var(--bad-line); }
 @media (max-width: 560px) {
   header { flex-wrap:wrap; gap:.5rem 1rem; padding:.6rem 1rem; }
-  header nav { order:3; flex:1 1 100%; display:flex; gap:1.2rem; }
+  header nav { order:3; flex:1 1 100%; display:flex; gap:1.1rem; overflow-x:auto; scrollbar-width:none; }
   header nav a { margin-right:0; white-space:nowrap; }
   header .theme-pick { margin-left:auto; }
   main { padding:1rem 1rem 3rem; }
@@ -152,8 +152,6 @@ button.secondary { background:var(--card); color:var(--ink); border:1px solid va
 /* Energy page: running total on top, use per bucket below. Home's colour from the Overview. */
 .flow .node-link { cursor:pointer; }
 .flow .node-link:hover circle, .flow .node-link:focus circle { stroke-width:4; }
-.crumb { margin:.2rem 0 -.6rem; font-size:.9em; }
-.crumb a { color:var(--ink2); text-decoration:none; }
 .energy-nav { display:flex; flex-wrap:wrap; gap:.7rem 1.2rem; align-items:center; margin:.6rem 0 1rem; }
 .seg { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; background:var(--card); }
 .seg a { padding:.35rem .85rem; color:var(--ink2); text-decoration:none; font-size:.9em; }

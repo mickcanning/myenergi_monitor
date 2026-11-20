@@ -1,7 +1,7 @@
 {% extends "base.html" %}
-{% block title %}Graphs · myenergi monitor{% endblock %}
+{% block title %}Harvi health · myenergi monitor{% endblock %}
 {% block content %}
-<h1>Graphs</h1>
+<h1>Harvi health</h1>
 {% if source == 'stored' %}
 <p class="muted">
   From recorded data: {{ stats.polls }} polls from {{ stats.start.strftime('%Y-%m-%d %H:%M') }} to {{ stats.end.strftime('%Y-%m-%d %H:%M') }} UTC.

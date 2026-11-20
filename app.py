@@ -294,7 +294,7 @@ def create_app(test_config=None):
         upload_link = None
         if cur:
             upload_link = url_for("report", log_id=cur["id"]) + ("?" + cur["query"] if cur["query"] else "")
-        # "Graphs" opens the report on recorded data; an uploaded CSV report stays one click away.
+        # "Harvi health" opens the report on recorded data; an uploaded CSV report stays one click away.
         return {"report_link": url_for("stored_report"), "upload_report_link": upload_link,
                 "has_current_report": cur is not None}
 

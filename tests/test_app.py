@@ -604,6 +604,7 @@ def test_energy_page(tmp_path):
     assert "From solar &amp; battery" in html and 'class="bar grid' in html and 'class="bar solar' not in html
     assert "Imported from the grid" in html and 'class="eplot imports"' in html and 'class="ibar home"' in html
     assert 'class="on" aria-current="true">Day' in html and 'class="eplot cum"' in html
+    assert 'href="/energy" class="on">Energy</a>' in html and 'class="on">Overview' not in html   # its own tab
     for p in ("week", "month", "year"):
         assert c.get(f"/energy?period={p}").status_code == 200
     assert c.get("/energy?period=bogus&date=nope").status_code == 200
