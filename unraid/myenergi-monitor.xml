@@ -12,7 +12,7 @@
   <Overview>Live myenergi device values with CT load charts. Records readings continuously and draws Harvi link reports for any date range. Set an app password to require a login.</Overview>
   <Category>Tools: HomeAutomation:</Category>
   <WebUI>http://[IP]:[PORT:5001]/</WebUI>
-  <Icon>https://raw.githubusercontent.com/mickcanning/myenergi_monitor/main/static/img/devices/eddi.svg</Icon>
+  <Icon>https://raw.githubusercontent.com/mickcanning/myenergi_monitor/main/static/img/app-icon.png</Icon>
   <Config Name="Web UI port" Target="5001" Default="5001" Mode="tcp" Description="Port for the web page" Type="Port" Display="always" Required="true" Mask="false">5001</Config>
   <Config Name="App data" Target="/app/instance" Default="/mnt/user/appdata/myenergi-monitor" Mode="rw" Description="Recorded readings (readings.db), uploaded logs, CT choices and the sign-in key" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/myenergi-monitor</Config>
   <Config Name="Hub serial" Target="MYENERGI_HUB_SERIAL" Default="" Mode="" Description="Your hub serial number" Type="Variable" Display="always" Required="true" Mask="false"/>

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="myenergi monitor">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2f86e8"/><stop offset="1" stop-color="#1c5cab"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#bg)"/>
+  <!-- house -->
+  <path d="M58 122 128 62l70 60" fill="none" stroke="#fff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M78 108v82h100v-82" fill="none" stroke="#fff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- lightning bolt -->
+  <path d="M138 112 104 160h28l-12 40 40-54h-28l12-34z" fill="#ffc94d" stroke="#ffc94d" stroke-width="4" stroke-linejoin="round"/>
+</svg>
