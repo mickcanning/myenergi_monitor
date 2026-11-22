@@ -137,6 +137,11 @@ def summarise(store, period, day, tz, now_ts):
                      "imp_home": None if future else g, "imp_batt": None if future else g_batt[k],
                      "imp_dev": None if future else g_dev[k], "imp_unattr": None if future else unattr,
                      "current": a <= now_ts < b})
+    # hot water tank temperature (optional, from the heating system), and its range in each slot
+    tank = [t for t in store.tank_temps(lo, min(hi, now_ts + 1)) if t[1] is not None]
+    for r in rows:
+        vals = [t[1] for t in tank if r["start"] <= t[0] < r["end"]]
+        r["tank"] = (round(min(vals), 1), round(max(vals), 1)) if vals else None
     past = [r for r in rows if r["kwh"] is not None]
     spans = [min(r["end"], now_ts) - r["start"] for r in past]
     span = sum(spans)
@@ -148,6 +153,7 @@ def summarise(store, period, day, tz, now_ts):
             "coverage": sum(r["coverage"] * w for r, w in zip(past, spans)) / span if span else 0.0,
             "measured": sum(r["measured"] * w for r, w in zip(past, spans)) / span if span else 0.0,
             "busiest": busiest, "in_progress": lo <= now_ts < hi, "future": lo > now_ts,
+            "tank": tank, "lo": lo, "hi": hi,
             "uses": use_cum, "uses_total": sum(use_cum.values()),
             "imports": {**imp_t, "unattr": max(imp_t["imp"] - imp_t["home"] - imp_t["batt"] - imp_t["dev"], 0.0)},
             "bucket_word": BUCKET_WORD[period]}
@@ -272,6 +278,38 @@ def chart(s):
             parts.append({"cls": cls, "y": y_hi, "h": round(bottom - y_hi, 2)})
         imp_bars.append({"x": x, "w": w, "parts": parts})
 
+    # tank temperature line, averaged into at most ~500 points and broken across gaps of over 30 minutes
+    tank_chart = None
+    if s.get("tank"):
+        lo_t, hi_t = s["lo"], s["hi"]
+        width = max(300, (hi_t - lo_t) / 500)
+        bins = {}
+        for ts, cur, *_ in s["tank"]:
+            bins.setdefault(int((ts - lo_t) // width), []).append((ts, cur))
+        pts = [(sum(t for t, _ in v) / len(v), sum(c for _, c in v) / len(v)) for _, v in sorted(bins.items())]
+        t_min, t_max = min(c for _, c in pts), max(c for _, c in pts)
+        lo_v, hi_v = math.floor((t_min - 2) / 10) * 10, math.ceil((t_max + 2) / 10) * 10
+        if hi_v - lo_v < 20:
+            hi_v = lo_v + 20
+
+        def ty(v):
+            return round(100 - (v - lo_v) / (hi_v - lo_v) * 100, 2)
+
+        segs, cur_seg, prev = [], [], None
+        for t, v in pts:
+            if prev is not None and t - prev > max(1800, 2 * width):
+                segs.append(cur_seg)
+                cur_seg = []
+            cur_seg.append(f"{round((t - lo_t) / (hi_t - lo_t) * 1000, 1)},{ty(v)}")
+            prev = t
+        segs.append(cur_seg)
+        last_t, last_v = s["tank"][-1][0], s["tank"][-1][1]
+        step = 10 if hi_v - lo_v <= 40 else 20
+        tank_chart = {"segs": [" ".join(sg) for sg in segs if sg],
+                      "ticks": [{"y": ty(v), "text": f"{v}°"} for v in range(lo_v + step, hi_v + 1, step)],
+                      "last": {"x": round((last_t - lo_t) / (hi_t - lo_t) * 100, 2), "y": ty(last_v), "v": last_v},
+                      "min": t_min, "max": t_max}
+
     def ticks(mx, step):
         out, v = [], step
         while v <= mx + 1e-9:
@@ -281,7 +319,7 @@ def chart(s):
 
     last = pts[-1] if len(pts) > 1 else None
     return {"line": line, "area": area, "band": band, "bars": bars, "xlabels": xlabels, "n": n,
-            "layers": layers, "use_ticks": ticks(use_max, use_step),
+            "layers": layers, "use_ticks": ticks(use_max, use_step), "tank": tank_chart,
             "cum_ticks": ticks(cum_max, cum_step), "bar_ticks": ticks(bar_max, bar_step),
             "imp_bars": imp_bars, "imp_ticks": ticks(imp_max, imp_step),
             "last": {"x": last[0] / 10, "y": last[1]} if last else None,
@@ -291,6 +329,7 @@ def chart(s):
                        "i": None if r["imp"] is None else [round(r[k] or 0, 3) for k in
                                                            ("imp", "exp", "imp_home", "imp_batt", "imp_dev", "imp_unattr")],
                        "e": None if r["err"] is None else round(r["err"], 3),
+                       "t": r.get("tank"),
                        "m": None if r["sampled"] is None else round(r["sampled"], 3),
                        "ce": None if r["cum_err"] is None else round(r["cum_err"], 3),
                        "ms": None if r["measured"] is None else round(r["measured"] * 100),

@@ -6,11 +6,19 @@
 <script>
   (function () {
     const box = document.getElementById("overview");
+    // Each refresh brings a new <svg>, whose animation clock starts at zero; set it to the page's clock so the
+    // moving arrowheads carry on smoothly instead of jumping back to the start.
+    function syncArrows() {
+      const svg = box.querySelector(".flow svg");
+      if (svg && svg.setCurrentTime) svg.setCurrentTime(performance.now() / 1000);
+    }
+    syncArrows();
     async function refresh() {
       try {
         const r = await fetch("{{ url_for('overview_partial') }}", {cache: "no-store"});
         if (r.status === 401) return location.reload();   // signed out: reload into the login page
         box.innerHTML = await r.text();
+        syncArrows();
       } catch (e) {
         const s = document.getElementById("status");
         if (s) s.textContent = "Refresh failed: " + e;

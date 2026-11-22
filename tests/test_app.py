@@ -6,6 +6,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import os  # noqa: E402
+# Never reach real services from the tests: values already in the environment win over the developer's .env.
+os.environ["EMBER_EMAIL"] = ""
+os.environ["EMBER_PASSWORD"] = ""
+
 import app as app_module  # noqa: E402
 from charts import LogFormatError, load_log  # noqa: E402
 
@@ -507,7 +512,9 @@ def test_flow_values():
     b = flow.build(status)
     by = {n["key"]: n for n in b["nodes"]}
     assert by["solar"]["label"] == "Solar & battery" and by["grid"]["caption"] == ["Exporting"]
-    assert by["eddi"]["caption"] == ["Heating", "Tank 55 °C"] and by["zappi"]["caption"] == ["Car unplugged", "Eco+ mode"]
+    assert by["eddi"]["caption"] == ["Heating"] and by["zappi"]["caption"] == ["Car unplugged", "Eco+ mode"]
+    by = {n["key"]: n for n in flow.build(status, show_tank_temp=True)["nodes"]}
+    assert by["eddi"]["caption"] == ["Heating", "Tank 55 °C"]
     assert by["grid"]["active"] and by["zappi"]["link"]["cls"] == "idle"
     # importing at night, no Grid CT: falls back to the hub's grd; battery charging shows as negative solar
     status["harvi"] = [{"sno": 3, "ectp1": -500, "ectt1": "Generation & Battery"}]
@@ -822,6 +829,66 @@ def test_signal_page_and_change_log(tmp_path):
     assert a.extensions["store"].changes() == []
 
 
+def test_tank_temp_only_shown_once_it_changes(tmp_path):
+    """No probe fitted: the Eddi reports a fixed 62, even through a boost, so it isn't shown until it varies."""
+    a = make_app(tmp_path)
+    c = a.test_client()
+    st = a.extensions["store"]
+    fake = a.extensions["client"]
+    base = fake.status()
+    fake.status = lambda: {**base, "eddi": [{**base["eddi"][0], "tp1": 62, "tp2": 127}]}
+    assert "Tank 62" not in c.get("/").get_data(as_text=True)
+    assert "Tank 62" not in c.get("/").get_data(as_text=True)          # the same value again: still hidden
+    st.note_tank_temps({"eddi": [{"sno": 999, "tp1": 127}]})            # 127 = no probe, never counted
+    assert not st.tank_temp_varies(999)
+    fake.status = lambda: {**base, "eddi": [{**base["eddi"][0], "tp1": 58, "tp2": 127}]}
+    assert "Tank 58 °C" in c.get("/").get_data(as_text=True)            # it changed: a real probe
+
+
+class FakeEmber:
+    """Stands in for ember.EmberClient: the heating system's zones, or None when it can't be reached."""
+    def __init__(self, tank=61.0):
+        self.tank, self.calls = tank, 0
+
+    def zones(self):
+        self.calls += 1
+        if self.tank is None:
+            return None
+        return [{"name": "Downstairs", "current": 21.2, "target": 23.0, "active": False, "hot_water": False},
+                {"name": "Hot Water", "current": self.tank, "target": 60.0, "active": True, "hot_water": True}]
+
+
+def test_ember_tank_temperature(tmp_path):
+    import ember, recorder
+    assert ember.hot_water(FakeEmber().zones())["current"] == 61.0 and ember.hot_water(None) is None
+    a = app_module.create_app({"TESTING": True, "UPLOAD_DIR": str(tmp_path), "DB_PATH": str(tmp_path / "e.db"),
+                               "HUB_SERIAL": "1", "API_KEY": "k", "APP_PASSWORD": "",
+                               "EMBER_EMAIL": "x@example.com", "EMBER_PASSWORD": "pw"})
+    a.extensions["client"] = FakeClient()
+    fake = a.extensions["ember"] = FakeEmber()
+    c = a.test_client()
+    assert "Tank 61 °C" in c.get("/").get_data(as_text=True)            # read straight from Ember
+    fake.tank = None                                                     # Ember down: the rest still works
+    html = c.get("/").get_data(as_text=True)
+    assert "Tank" not in html and "Hot water" in html
+
+    # the recorder reads Ember every 5 minutes, alongside the myenergi polls
+    st = a.extensions["store"]
+    fake.tank = 55.0
+    rec = recorder.Recorder(st, FakeClient().status, get_ember=fake.zones)
+    t0 = 1795000000
+    for i in range(41):                                                  # 10 minutes of 15 s polls
+        rec.poll_once(now=t0 + i * 15)
+        fake.tank += 0.1
+    temps = st.tank_temps(t0, t0 + 3600)
+    assert [t[0] - t0 for t in temps] == [0, 300, 600] and temps[0][1] == 55.0 and temps[0][3] == 1
+    assert "Tank 55 °C" not in c.get("/").get_data(as_text=True)         # too old: read Ember again
+    # the Energy tab draws the tank's temperature and gives each slot's range in the tooltip
+    a.config["NOW"] = t0 + 900
+    html = c.get("/energy").get_data(as_text=True)
+    assert "Hot water tank" in html and 'class="tank-line"' in html and '"t": [55.0, 59.0]' in html   # 55, 57, 59 in one half hour
+
+
 if __name__ == "__main__":
     import tempfile
     for fn in (test_dashboard_and_api, test_upload_and_report, test_current_report_persists,
@@ -831,7 +898,8 @@ if __name__ == "__main__":
                test_stored_report_with_recording_gap, test_overview_page, test_energy_buckets_and_totals,
                test_flow_recording_and_backfill, test_energy_page, test_estimate_combines_measured_and_sampled,
                test_history_sync, test_estimate_overnight_battery_charging, test_minutes_table_upgrade,
-               test_quiet_solar_harvi_counts_as_zero, test_harvi_signal_metrics, test_signal_page_and_change_log):
+               test_quiet_solar_harvi_counts_as_zero, test_harvi_signal_metrics, test_signal_page_and_change_log,
+               test_tank_temp_only_shown_once_it_changes, test_ember_tank_temperature):
         with tempfile.TemporaryDirectory() as d:
             fn(Path(d))
             print("ok", fn.__name__)

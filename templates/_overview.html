@@ -14,6 +14,14 @@
     {% for n in flow.nodes %}{% set l = n.link %}
     <line class="link {{ l.cls }}" x1="{{ l.x1 }}" y1="{{ l.y1 }}" x2="{{ l.x2 }}" y2="{{ l.y2 }}"/>
     {% if l.active %}
+    <g class="flow-arrows {{ l.cls }}">
+      {% for begin in l.arrows %}
+      <path d="M-4.5,-4.5 L4.5,0 L-4.5,4.5 Z" opacity="0">
+        <animateMotion path="M{{ l.fx1 }},{{ l.fy1 }} L{{ l.fx2 }},{{ l.fy2 }}" rotate="auto" dur="{{ l.travel }}s" begin="{{ begin }}s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.2;0.8;1" dur="{{ l.travel }}s" begin="{{ begin }}s" repeatCount="indefinite"/>
+      </path>
+      {% endfor %}
+    </g>
     <path class="arrow {{ l.cls }}" d="M-6,-6 L6,0 L-6,6 z" transform="translate({{ l.mx }} {{ l.my }}) rotate({{ l.angle }})"/>
     {% endif %}
     {% endfor %}

@@ -14,6 +14,7 @@ import io
 from urllib.parse import urlencode
 
 import charts
+import ember
 import energy
 import harvi_signal
 import flow
@@ -73,6 +74,8 @@ def create_app(test_config=None):
         POLL_SECONDS=int(os.environ.get("POLL_SECONDS", "15")),
         RETENTION_DAYS=int(os.environ.get("RETENTION_DAYS", "180")),
         TIMEZONE=os.environ.get("TZ") or "Europe/London",    # day/week/month boundaries on the Energy page
+        EMBER_EMAIL=os.environ.get("EMBER_EMAIL"),            # optional: EPH Ember heating (hot water tank probe)
+        EMBER_PASSWORD=os.environ.get("EMBER_PASSWORD"),
     )
     if test_config:
         app.config.update(test_config)
@@ -105,11 +108,30 @@ def create_app(test_config=None):
 
     # ---- always-on recording -----------------------------------------------
     # Polls the API in the background for as long as the app runs (one gunicorn worker = one recorder).
+    # ---- optional EPH Ember heating system ------------------------------------
+    def get_ember():
+        if not (app.config.get("EMBER_EMAIL") and app.config.get("EMBER_PASSWORD")):
+            return None
+        if "ember" not in app.extensions:
+            app.extensions["ember"] = ember.EmberClient(app.config["EMBER_EMAIL"], app.config["EMBER_PASSWORD"])
+        return app.extensions["ember"]
+
+    def tank_temperature():
+        """The hot water tank's temperature from Ember (recorded within 15 minutes, else read now), or None."""
+        if get_ember() is None:
+            return None
+        latest = store.latest_tank_temp()
+        if latest and time.time() - latest[0] < 900 and latest[1] is not None:
+            return latest[1]
+        hw = ember.hot_water(get_ember().zones())
+        return hw["current"] if hw else None
+
     rec = None
     if app.config["RECORD"] and app.config["HUB_SERIAL"] and app.config["API_KEY"] and not app.config.get("TESTING"):
         rec = app.extensions["recorder"] = recorder.Recorder(
             store, lambda: get_client().status(), app.config["POLL_SECONDS"], app.config["RETENTION_DAYS"],
-            get_history=lambda kind, sno, day: get_client().day_history(kind, sno, day))
+            get_history=lambda kind, sno, day: get_client().day_history(kind, sno, day),
+            get_ember=(lambda: get_ember().zones()) if get_ember() else None)
         rec.start()
 
     # ---- live values -------------------------------------------------------
@@ -195,7 +217,11 @@ def create_app(test_config=None):
         for d in devices:
             d["image"] = url_for("static", filename=device_image(d["kind"]))
         hub = next((d for d in devices if d["is_hub"]), devices[0] if devices else None)
-        return {"flow": flow.build(status), "devices": devices, "error": None,
+        store.note_tank_temps(status)
+        eddi = next((r for r in status.get("eddi", []) or [] if isinstance(r, dict) and "sno" in r), None)
+        show_temp = bool(eddi) and store.tank_temp_varies(eddi["sno"])
+        return {"flow": flow.build(status, show_tank_temp=show_temp, tank=tank_temperature()), "devices": devices,
+                "error": None,
                 "reading_utc": hub and hub["report_utc"], "reading_age": hub and hub["age_s"]}
 
     @app.get("/")

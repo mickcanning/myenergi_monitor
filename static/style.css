@@ -120,10 +120,12 @@ button.secondary { background:var(--card); color:var(--ink); border:1px solid va
 .flow .link.src-solar { stroke:var(--solar); } .flow .link.src-grid { stroke:var(--grid); } .flow .link.load { stroke:var(--load); }
 .flow .link:not(.idle) { stroke-width:4; stroke-opacity:.75; }
 .flow .arrow.src-solar { fill:var(--solar); } .flow .arrow.src-grid { fill:var(--grid); } .flow .arrow.load { fill:var(--load); }
-.flow .node circle { fill:var(--card); stroke:var(--line); stroke-width:2.5; }
-.flow .node.src-solar circle { stroke:var(--solar); } .flow .node.src-grid circle { stroke:var(--grid); } .flow .node.load circle { stroke:var(--load); }
+.flow .node > circle { fill:var(--card); stroke:var(--line); stroke-width:2.5; }
+.flow .node.src-solar > circle { stroke:var(--solar); } .flow .node.src-grid > circle { stroke:var(--grid); } .flow .node.load > circle { stroke:var(--load); }
 .flow .icon { fill:none; stroke:var(--ink); stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
 .flow .node.idle .icon { stroke:var(--ink2); }
+.flow .icon .tyre { fill:var(--ink); stroke:var(--card); stroke-width:1; }        /* solid wheels: white on dark */
+.flow .node.idle .icon .tyre { fill:var(--ink2); }
 .flow .hub-ring { fill:var(--card); stroke:var(--solar); stroke-width:3; }
 .flow text { fill:var(--ink); font-family:inherit; }
 .flow .hub-pct { font-size:20px; font-weight:700; font-variant-numeric:tabular-nums; }
@@ -151,7 +153,7 @@ button.secondary { background:var(--card); color:var(--ink); border:1px solid va
 }
 /* Energy page: running total on top, use per bucket below. Home's colour from the Overview. */
 .flow .node-link { cursor:pointer; }
-.flow .node-link:hover circle, .flow .node-link:focus circle { stroke-width:4; }
+.flow .node-link:hover .node > circle, .flow .node-link:focus .node > circle { stroke-width:4; }
 .energy-nav { display:flex; flex-wrap:wrap; gap:.7rem 1.2rem; align-items:center; margin:.6rem 0 1rem; }
 .seg { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; background:var(--card); }
 .seg a { padding:.35rem .85rem; color:var(--ink2); text-decoration:none; font-size:.9em; }
@@ -281,3 +283,17 @@ button.secondary { background:var(--card); color:var(--ink); border:1px solid va
 .small-btn { padding:.15rem .6rem; font-size:.8em; }
 .verdict { font-weight:600; }
 .verdict.good { color:var(--good); } .verdict.bad { color:var(--bad); } .verdict.none { color:var(--ink2); font-weight:500; }
+/* Overview: arrowheads glide along active links the way power flows; faster = more power. */
+.flow .flow-arrows.src-solar { fill:var(--solar); } .flow .flow-arrows.src-grid { fill:var(--grid); } .flow .flow-arrows.load { fill:var(--load); }
+.flow .link:not(.idle) { stroke-opacity:.35; }
+/* the still arrowhead shows the direction only when motion is turned off */
+.flow .arrow { display:none; }
+@media (prefers-reduced-motion: reduce) {
+  .flow .flow-arrows { display:none; }
+  .flow .arrow { display:inline; }
+}
+/* Hot water tank temperature (heating system probe), in the hot-water yellow */
+.eplot.tank { height:110px; margin-bottom:1.1rem; }
+.eplot .tank-line { fill:none; stroke:var(--use-eddi); stroke-width:2; vector-effect:non-scaling-stroke; stroke-linejoin:round; }
+.eplot .tank-end { position:absolute; width:9px; height:9px; margin:-4.5px 0 0 -4.5px; border-radius:50%; background:var(--use-eddi); box-shadow:0 0 0 2px var(--card); }
+.energy-chart .row-tank i { background:var(--use-eddi); border-radius:50%; }

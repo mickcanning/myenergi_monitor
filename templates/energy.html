@@ -86,6 +86,20 @@
     </svg>
     <div class="band" hidden></div>
   </div>
+  {% if ch.tank %}
+  <div class="panel-title">Hot water tank <span class="muted">°C · from the heating system's probe</span></div>
+  <div class="eplot tank">
+    {% for tk in ch.tank.ticks %}<span class="ytick" style="top:{{ tk.y }}%">{{ tk.text }}</span>{% endfor %}
+    <svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
+      {% for tk in ch.tank.ticks %}<line class="grid" x1="0" x2="1000" y1="{{ tk.y }}" y2="{{ tk.y }}"/>{% endfor %}
+      {% for sg in ch.tank.segs %}<polyline class="tank-line" points="{{ sg }}"/>{% endfor %}
+      <line class="axis" x1="0" x2="1000" y1="100" y2="100"/>
+    </svg>
+    <i class="tank-end" style="left:{{ ch.tank.last.x }}%; top:{{ ch.tank.last.y }}%"></i>
+    <span class="cum-label" style="{{ 'right:' ~ (100 - ch.tank.last.x) ~ '%' if ch.tank.last.x > 50 else 'left:' ~ ch.tank.last.x ~ '%' }}; top:{{ ch.tank.last.y }}%">{{ '%.0f' % ch.tank.last.v }} °C</span>
+    <div class="band" hidden></div>
+  </div>
+  {% endif %}
   <div class="panel-title">Per {{ s.bucket_word }} <span class="muted">kWh</span>
     <span class="legend"><span><i class="solar"></i>Solar &amp; battery {{ '%.1f' % s.total_solar }}</span><span><i class="grid"></i>Grid {{ '%.1f' % s.total_grid }}</span></span>
   </div>
@@ -158,6 +172,7 @@
         uses.map((u, j) => (j === 0 || d.u[j] >= 0.005) ?
           `<div class="row-use-${u.key}"><i></i>${u.label} <b>${fmt(d.u[j])}</b>` +
           (j === 0 && d.e >= 0.005 ? ` <span class="muted">± ${d.e.toFixed(2)}</span>` : "") + `</div>` : "").join("") +
+        (d.t ? `<div class="row-tank"><i></i>Tank <b>${d.t[0] === d.t[1] ? d.t[0].toFixed(0) : d.t[0].toFixed(0) + "–" + d.t[1].toFixed(0)} °C</b></div>` : "") +
         `<div class="tip-gap muted">Home's energy came from</div>` +
         `<div class="row-solar"><i></i>Solar &amp; battery <b>${fmt(d.s)}</b></div>` +
         `<div class="row-grid"><i></i>Grid <b>${fmt(d.g)}</b></div>` +

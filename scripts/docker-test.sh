@@ -9,6 +9,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+case "${1:-}" in
+  ""|run) ;;
+  *) printf 'Unknown option: %q\nUsage: scripts/docker-test.sh [run]\n' "$1" >&2; exit 2 ;;
+esac
+
 IMAGE=myenergi_monitor:local
 NAME=myenergi-smoke
 PORT=${PORT:-5001}

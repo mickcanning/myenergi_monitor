@@ -54,6 +54,14 @@ CREATE TABLE IF NOT EXISTS signal_hours (
 CREATE TABLE IF NOT EXISTS changes (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, note TEXT NOT NULL
 );
+-- Zone temperatures from an EPH Ember heating system (optional), every few minutes.
+CREATE TABLE IF NOT EXISTS temps (
+    ts INTEGER NOT NULL, zone TEXT NOT NULL, current REAL, target REAL, active INTEGER, hot_water INTEGER,
+    PRIMARY KEY (ts, zone)
+);
+-- Distinct tank temperatures each Eddi has reported: shown only once it has reported more than one, since
+-- without a probe some report a fixed value.
+CREATE TABLE IF NOT EXISTS tank_temps (sno TEXT, value REAL, PRIMARY KEY (sno, value));
 DROP TABLE IF EXISTS energy_hh;
 DROP TABLE IF EXISTS energy_hh2;
 CREATE TABLE IF NOT EXISTS energy_hh3 (
@@ -230,6 +238,35 @@ class Store:
                 c.execute("DELETE FROM energy_hh3")              # recompute the energy figures
         return fixed
 
+    # -- tank temperature ------------------------------------------------------
+    def note_tank_temps(self, status):
+        rows = [(str(r["sno"]), t) for r in status.get("eddi", []) or []
+                if isinstance(r, dict) and "sno" in r and (t := flow.tank_temp(r)) is not None]
+        if rows:
+            with self._conn() as c:
+                c.executemany("INSERT OR IGNORE INTO tank_temps VALUES (?, ?)", rows)
+
+    def tank_temp_varies(self, sno):
+        return self._conn().execute("SELECT COUNT(*) FROM tank_temps WHERE sno = ?", (str(sno),)).fetchone()[0] > 1
+
+    # -- Ember zone temperatures ------------------------------------------------
+    def insert_temps(self, ts, zones):
+        with self._conn() as c:
+            c.executemany("INSERT OR REPLACE INTO temps VALUES (?, ?, ?, ?, ?, ?)",
+                          [(int(ts), z["name"], z["current"], z["target"], int(z["active"]), int(z["hot_water"]))
+                           for z in zones])
+
+    def tank_temps(self, start_ts, end_ts):
+        """[(ts, current, target, active)] for the hot water zone in [start, end)."""
+        return self._conn().execute(
+            "SELECT ts, current, target, active FROM temps WHERE hot_water = 1 AND ts >= ? AND ts < ? ORDER BY ts",
+            (int(start_ts), int(end_ts))).fetchall()
+
+    def latest_tank_temp(self):
+        """(ts, current, target, active) of the newest hot water reading, or None."""
+        return self._conn().execute(
+            "SELECT ts, current, target, active FROM temps WHERE hot_water = 1 ORDER BY ts DESC LIMIT 1").fetchone()
+
     # -- change log -------------------------------------------------------------
     def changes(self):
         return [{"id": i, "ts": ts, "note": note} for i, ts, note in
@@ -315,6 +352,7 @@ class Store:
             c.execute("DELETE FROM minutes WHERE ts < ?", (int(before_ts),))
             c.execute("DELETE FROM energy_hh3 WHERE hh < ?", (int(before_ts),))
             c.execute("DELETE FROM signal_hours WHERE hour < ?", (int(before_ts),))
+            c.execute("DELETE FROM temps WHERE ts < ?", (int(before_ts),))
             c.execute("DELETE FROM history_days WHERE day < ?", (_utc(before_ts).strftime("%Y-%m-%d"),))
             c.execute("DELETE FROM flows WHERE poll < ?", (int(before_ts),))
             return c.execute("DELETE FROM readings WHERE poll < ?", (int(before_ts),)).rowcount
@@ -326,9 +364,13 @@ class Recorder(threading.Thread):
     HISTORY_EVERY_S = 600          # fetch the hub's minute history this often
     HISTORY_DAYS_PER_SYNC = 10     # at most this many days per sync, so a long backfill is spread out
 
-    def __init__(self, store, get_status, interval=15, retention_days=180, get_history=None):
+    EMBER_EVERY_S = 300            # read Ember zone temperatures this often (it's a cloud service)
+
+    def __init__(self, store, get_status, interval=15, retention_days=180, get_history=None, get_ember=None):
         super().__init__(name="recorder", daemon=True)
         self.store, self.get_status, self.get_history = store, get_status, get_history
+        self.get_ember = get_ember
+        self._last_ember = 0.0
         self._last_history = 0.0
         self.interval, self.retention_s = max(5, interval), retention_days * 86400
         self.stop_event = threading.Event()
@@ -344,6 +386,15 @@ class Recorder(threading.Thread):
             status = self.get_status()
             self.store.insert(now, summarise(status, now=_utc(now)))
             self.store.insert_flow(now, flow.compute(status, now=_utc(now)))
+            self.store.note_tank_temps(status)
+            if self.get_ember and now - self._last_ember >= self.EMBER_EVERY_S:
+                self._last_ember = now
+                try:
+                    zones = self.get_ember()
+                    if zones:
+                        self.store.insert_temps(now, zones)
+                except Exception as e:
+                    log.warning("recorder: Ember read failed: %s", e)
             self.last_ok, self.latest = now, (now, status)
             if self.get_history and now - self._last_history >= self.HISTORY_EVERY_S:
                 self._last_history = now
