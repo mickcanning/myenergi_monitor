@@ -2,35 +2,6 @@
 {% block title %}Harvi health · myenergi monitor{% endblock %}
 {% block content %}
 <h1>Harvi health</h1>
-{% if source == 'stored' %}
-<p class="muted">
-  From recorded data: {{ stats.polls }} polls from {{ stats.start.strftime('%Y-%m-%d %H:%M') }} to {{ stats.end.strftime('%Y-%m-%d %H:%M') }} UTC.
-  {% if stats.eddi_max_age is not none %}Eddi's report was never more than {{ '%.0f' % stats.eddi_max_age }} s old.{% endif %}
-  {% if stats.recording_gaps %}Not recording for {{ stats.recording_gap_s | duration }} in this range ({{ stats.recording_gaps | length }} pause{{ 's' if stats.recording_gaps | length != 1 }}, hatched on the chart).{% endif %}
-  {% include "_recording.html" %}
-</p>
-{% if rng.note %}<p class="notice" role="status">{{ rng.note }}</p>{% endif %}
-{% if signal %}{% include "_signal.html" %}{% endif %}
-{% else %}
-<p class="muted">
-  From an uploaded log: {{ stats.polls }} polls from {{ stats.start.strftime('%Y-%m-%d %H:%M') }} to {{ stats.end.strftime('%Y-%m-%d %H:%M') }} UTC.
-  {% if stats.eddi_max_age is not none %}Eddi's report was never more than {{ '%.0f' % stats.eddi_max_age }} s old.{% endif %}
-  {% if stats.recording_gaps %}Not recording for {{ stats.recording_gap_s | duration }} ({{ stats.recording_gaps | length }} pause{{ 's' if stats.recording_gaps | length != 1 }}, hatched on the chart).{% endif %}
-  <a href="{{ url_for('stored_report') }}">Report on recorded data instead</a>
-</p>
-{% endif %}
-
-<details class="panel">
-  <summary>Upload a log from monitor.py instead</summary>
-  <form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data" class="controls">
-    <label>Log file (.csv)
-      <input type="file" name="log" accept=".csv,text/csv" required>
-    </label>
-    <button type="submit">Generate report</button>
-  </form>
-  <p class="muted">Only needed for logs recorded elsewhere: this app records continuously on its own.</p>
-</details>
-
 {% set grid_label = names.get(params.grid_sno) or params.grid_sno %}
 <form method="get" class="panel graph-options">
   {% if source == 'stored' %}
@@ -74,6 +45,26 @@
     </div>
   </details>
 </form>
+
+
+{% if source == 'stored' %}
+<p class="muted">
+  From recorded data: {{ stats.polls }} polls from {{ stats.start.strftime('%Y-%m-%d %H:%M') }} to {{ stats.end.strftime('%Y-%m-%d %H:%M') }} UTC.
+  {% if stats.eddi_max_age is not none %}Eddi's report was never more than {{ '%.0f' % stats.eddi_max_age }} s old.{% endif %}
+  {% if stats.recording_gaps %}Not recording for {{ stats.recording_gap_s | duration }} in this range ({{ stats.recording_gaps | length }} pause{{ 's' if stats.recording_gaps | length != 1 }}, hatched on the chart).{% endif %}
+  {% include "_recording.html" %}
+</p>
+{% if rng.note %}<p class="notice" role="status">{{ rng.note }}</p>{% endif %}
+{% if signal %}{% include "_signal.html" %}{% endif %}
+{% else %}
+<p class="muted">
+  From an uploaded log: {{ stats.polls }} polls from {{ stats.start.strftime('%Y-%m-%d %H:%M') }} to {{ stats.end.strftime('%Y-%m-%d %H:%M') }} UTC.
+  {% if stats.eddi_max_age is not none %}Eddi's report was never more than {{ '%.0f' % stats.eddi_max_age }} s old.{% endif %}
+  {% if stats.recording_gaps %}Not recording for {{ stats.recording_gap_s | duration }} ({{ stats.recording_gaps | length }} pause{{ 's' if stats.recording_gaps | length != 1 }}, hatched on the chart).{% endif %}
+  <a href="{{ url_for('stored_report') }}">Report on recorded data instead</a> ·
+  <a href="{{ url_for('upload') }}">Upload another log</a>
+</p>
+{% endif %}
 
 <img class="chart" data-themed-src="{{ png_url }}?{{ query }}" alt="Harvi report age and CT power over time">
 <noscript><img class="chart" src="{{ png_url }}?{{ query }}" alt="Harvi report age and CT power over time"></noscript>

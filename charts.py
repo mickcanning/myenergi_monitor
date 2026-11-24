@@ -232,10 +232,14 @@ _TIME_STEPS = [(5, 5), (10, 2), (15, 3), (20, 2), (30, 2), (60, 4), (120, 2), (1
                (720, 4), (1440, 4), (2880, 2), (4320, 3), (10080, 7)]
 
 
+MIN_SPAN = timedelta(minutes=10)
+
+
 def _time_axis(axes, start, end, pal, max_labels=22):
     """Dense, regular time ticks: the smallest 'nice' step that fits max_labels across the range, unlabelled
     minor ticks in between, faint vertical gridlines. Labels are one line: the date at midnight, else the time."""
-    span_min = max(1.0, (end - start).total_seconds() / 60)
+    lo, hi = axes[0].get_xlim()                       # the range actually drawn (matplotlib widens an empty one)
+    span_min = max(1.0, (hi - lo) * 24 * 60, (end - start).total_seconds() / 60)
     if span_min > 36 * 60:
         max_labels = min(max_labels, 16)              # "12 Nov" labels are a little wider than "14:00"
     step, minor_n = next(((s, n) for s, n in _TIME_STEPS if span_min / s <= max_labels), _TIME_STEPS[-1])
@@ -285,6 +289,9 @@ def render_png(log, grid_sno, names=None, thresh_s=30, gap_s=120, ct_w=500, nigh
     grows = log.rows[("harvi", grid_sno)]
     conc = concerns(grows, gap_s, ct_w)
     start, end = log.start, log.end
+    if end - start < MIN_SPAN:          # e.g. a single poll just after starting: give the time axis some width
+        mid = start + (end - start) / 2
+        start, end = mid - MIN_SPAN / 2, mid + MIN_SPAN / 2
     gaps = recording_gaps(grows)
     gap_th = {sno: recording_gap_threshold(log.rows[("harvi", sno)]) for sno in harvis}
 

@@ -29,17 +29,27 @@
       <a href="{{ report_link }}" {% if request.endpoint in ('upload', 'report', 'stored_report') %}class="on"{% endif %}>Harvi health</a>
       {% endif %}
     </nav>
-    <label class="theme-pick">Theme
-      <select id="theme">
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
-      </select>
-    </label>
-    {% if auth_enabled and signed_in %}
-    <form method="post" action="{{ url_for('logout') }}" class="signout">
-      <button type="submit" class="secondary">Sign out</button>
-    </form>
-    {% endif %}
+    <details class="settings">
+      <summary aria-label="Settings" title="Settings">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </summary>
+      <div class="settings-panel">
+        <label class="settings-row">Theme
+          <select id="theme">
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
+        {% if request.endpoint != 'login' %}
+        <a class="settings-row" href="{{ url_for('upload') }}">Upload a monitor.py log</a>
+        {% endif %}
+        {% if auth_enabled and signed_in %}
+        <form method="post" action="{{ url_for('logout') }}" class="settings-row signout">
+          <button type="submit" class="secondary">Sign out</button>
+        </form>
+        {% endif %}
+      </div>
+    </details>
   </header>
   <main>{% block content %}{% endblock %}</main>
   <script>
@@ -61,6 +71,10 @@
         apply();
       });
       apply();
+
+      const menu = document.querySelector("details.settings");
+      document.addEventListener("click", (e) => { if (menu && menu.open && !menu.contains(e.target)) menu.open = false; });
+      document.addEventListener("keydown", (e) => { if (e.key === "Escape" && menu) menu.open = false; });
     })();
   </script>
 </body>

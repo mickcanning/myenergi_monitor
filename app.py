@@ -428,9 +428,15 @@ def create_app(test_config=None):
             end = max(end, min(hi, start + timedelta(hours=24)))
         if end - start > MAX_SPAN:
             start, note = end - MAX_SPAN, "Reports cover at most 31 days, so the start was moved forward."
-        presets = [(label, {"from": max(lo, hi - d).strftime(DT_FMT), "to": hi.strftime(DT_FMT)})
-                   for label, d in (("Last 6 h", timedelta(hours=6)), ("Last 24 h", timedelta(days=1)),
-                                    ("Last 7 days", timedelta(days=7)), ("Last 31 days", MAX_SPAN))]
+        # Quick ranges. Ones that reach back past the first recording all cover the same data, so they become a
+        # single "All data" button rather than several buttons that look like they do nothing.
+        presets = []
+        for label, d in (("Last 6 h", timedelta(hours=6)), ("Last 24 h", timedelta(days=1)),
+                         ("Last 7 days", timedelta(days=7)), ("Last 31 days", MAX_SPAN)):
+            if hi - d <= lo:
+                presets.append(("All data", {"from": lo.strftime(DT_FMT), "to": hi.strftime(DT_FMT)}))
+                break
+            presets.append((label, {"from": (hi - d).strftime(DT_FMT), "to": hi.strftime(DT_FMT)}))
         return {"lo": lo, "hi": hi, "start": start, "end": end, "note": note, "presets": presets,
                 "from_s": start.strftime(DT_FMT), "to_s": end.strftime(DT_FMT)}
 

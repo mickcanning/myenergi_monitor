@@ -380,7 +380,7 @@ def test_stored_report(tmp_path):
     assert 'href="/report"' in page
     html = c.get("/report").get_data(as_text=True)
     assert 'type="datetime-local"' in html and f'value="{fmt(hi + 60)}"' in html
-    assert f'min="{fmt(lo)}"' in html and "Last 7 days" in html
+    assert f'min="{fmt(lo)}"' in html and "All data" in html   # 26 h recorded: 7 and 31 days merge into All data
     assert "Gaps of concern" in html and "None found" not in html           # the ~5-minute silence is found
     # a narrower range, the chart for it, and the same in dark
     q = f"from={fmt(hi - 3 * 3600)}&to={fmt(hi - 3600)}&grid=111"
@@ -889,6 +889,25 @@ def test_ember_tank_temperature(tmp_path):
     assert "Hot water tank" in html and 'class="tank-line"' in html and '"t": [55.0, 59.0]' in html   # 55, 57, 59 in one half hour
 
 
+def test_chart_with_a_single_poll_is_quick():
+    """Just after starting there may be one poll: the time axis must not end up with a zero-length range (it
+    once asked for 420,480 ticks and took ~35 s)."""
+    import time
+    from charts import render_png
+    csv = HEADER + ("2026-11-24T10:54:47+00:00,harvi,111,2026-11-24T10:54:40+00:00,7,1,0,,4000,0,0\n"
+                    "2026-11-24T10:54:47+00:00,harvi,222,2026-11-24T10:54:30+00:00,17,1,0,,-3000,0,0\n")
+    t = time.time()
+    png = render_png(load_log(io.BytesIO(csv.encode())), "111")
+    assert png[:4] == b"\x89PNG" and time.time() - t < 5
+
+
+def test_quick_ranges_merge_into_all_data(tmp_path):
+    a = make_recorded_app(tmp_path, hours=30, step=300)          # 30 hours recorded
+    html = a.test_client().get("/report").get_data(as_text=True)
+    assert "Last 6 h" in html and "Last 24 h" in html and "All data" in html
+    assert "Last 7 days" not in html and "Last 31 days" not in html
+
+
 if __name__ == "__main__":
     import tempfile
     for fn in (test_dashboard_and_api, test_upload_and_report, test_current_report_persists,
@@ -899,12 +918,15 @@ if __name__ == "__main__":
                test_flow_recording_and_backfill, test_energy_page, test_estimate_combines_measured_and_sampled,
                test_history_sync, test_estimate_overnight_battery_charging, test_minutes_table_upgrade,
                test_quiet_solar_harvi_counts_as_zero, test_harvi_signal_metrics, test_signal_page_and_change_log,
-               test_tank_temp_only_shown_once_it_changes, test_ember_tank_temperature):
+               test_tank_temp_only_shown_once_it_changes, test_ember_tank_temperature,
+               test_quick_ranges_merge_into_all_data):
         with tempfile.TemporaryDirectory() as d:
             fn(Path(d))
             print("ok", fn.__name__)
     test_load_log_errors()
     print("ok test_load_log_errors")
+    test_chart_with_a_single_poll_is_quick()
+    print("ok test_chart_with_a_single_poll_is_quick")
     test_format_duration()
     print("ok test_format_duration")
     test_flow_values()
