@@ -54,6 +54,8 @@ CREATE TABLE IF NOT EXISTS signal_hours (
 CREATE TABLE IF NOT EXISTS changes (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, note TEXT NOT NULL
 );
+-- App settings, e.g. the electricity tariff (JSON).
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
 -- Zone temperatures from an EPH Ember heating system (optional), every few minutes.
 CREATE TABLE IF NOT EXISTS temps (
     ts INTEGER NOT NULL, zone TEXT NOT NULL, current REAL, target REAL, active INTEGER, hot_water INTEGER,
@@ -285,6 +287,15 @@ class Store:
         """(ts, current, target, active) of the newest hot water reading, or None."""
         return self._conn().execute(
             "SELECT ts, current, target, active FROM temps WHERE hot_water = 1 ORDER BY ts DESC LIMIT 1").fetchone()
+
+    # -- settings ----------------------------------------------------------------
+    def get_setting(self, key):
+        row = self._conn().execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else None
+
+    def set_setting(self, key, value):
+        with self._conn() as c:
+            c.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", (key, value))
 
     # -- change log -------------------------------------------------------------
     def changes(self):

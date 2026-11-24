@@ -291,6 +291,21 @@ def chart(s):
     rooms_chart = temp_chart(sorted(s["rooms"].items()), s["lo"], s["hi"], pad=1, round_to=2) \
         if s.get("rooms") else None
 
+    # cost of grid import per slot (when a tariff is set)
+    cost_bars, cost_ticks = [], []
+    if s.get("cost"):
+        c_max, c_step = _nice_max(max([r.get("cost") or 0 for r in rows] + [0]))
+        for i, r in enumerate(rows):
+            if r.get("cost"):
+                yy = y(r["cost"], c_max)
+                if 100 - yy >= 0.3:
+                    cost_bars.append({"x": round(i * col + pad / 2, 2), "w": round(col - pad, 2), "y": yy,
+                                      "h": round(100 - yy, 2)})
+        v = c_step
+        while v <= c_max + 1e-9:
+            cost_ticks.append({"y": y(v, c_max), "v": v})
+            v += c_step
+
     def ticks(mx, step):
         out, v = [], step
         while v <= mx + 1e-9:
@@ -301,6 +316,7 @@ def chart(s):
     last = pts[-1] if len(pts) > 1 else None
     return {"line": line, "area": area, "band": band, "bars": bars, "xlabels": xlabels, "n": n,
             "layers": layers, "use_ticks": ticks(use_max, use_step), "tank": tank_chart, "rooms": rooms_chart,
+            "cost_bars": cost_bars, "cost_ticks": cost_ticks,
             "cum_ticks": ticks(cum_max, cum_step), "bar_ticks": ticks(bar_max, bar_step),
             "imp_bars": imp_bars, "imp_ticks": ticks(imp_max, imp_step),
             "last": {"x": last[0] / 10, "y": last[1]} if last else None,
@@ -311,6 +327,9 @@ def chart(s):
                                                            ("imp", "exp", "imp_home", "imp_batt", "imp_dev", "imp_unattr")],
                        "e": None if r["err"] is None else round(r["err"], 3),
                        "t": r.get("tank"), "rm": r.get("rooms"),
+                       "$": None if r.get("cost") is None else round(r["cost"], 4),
+                       "$r": None if not r.get("cost_by_rate") else
+                       [[n, round(k, 3), round(v, 4)] for n, (k, v) in r["cost_by_rate"].items()],
                        "m": None if r["sampled"] is None else round(r["sampled"], 3),
                        "ce": None if r["cum_err"] is None else round(r["cum_err"], 3),
                        "ms": None if r["measured"] is None else round(r["measured"] * 100),
@@ -361,3 +380,23 @@ def temp_chart(series, lo_t, hi_t, pad, round_to):
     first = math.ceil((lo_v + 0.001) / step) * step
     return {"lines": lines, "last": lines[0]["last"],
             "ticks": [{"y": ty(v), "text": f"{v:g}°"} for v in range(int(first), int(hi_v) + 1, step)]}
+
+
+def add_costs(s, tariff, cost_fn):
+    """Attach the cost of grid import to each slot (and the period's totals, per rate) when a tariff is set."""
+    s["tariff"] = tariff
+    if not tariff:
+        return
+    per = cost_fn(tariff, [(r["start"], r["end"]) for r in s["rows"]]) or []
+    total, by_rate = 0.0, {}
+    for r, c in zip(s["rows"], per):
+        if r["kwh"] is None:
+            r["cost"] = None
+            continue
+        r["cost"], r["cost_by_rate"] = c["cost"], c["by_rate"]
+        total += c["cost"]
+        for name, (k, v) in c["by_rate"].items():
+            tk, tv = by_rate.get(name, (0.0, 0.0))
+            by_rate[name] = (tk + k, tv + v)
+    s["cost"] = {"total": total, "currency": tariff.get("currency", ""),
+                 "by_rate": sorted(by_rate.items(), key=lambda kv: -kv[1][1])}

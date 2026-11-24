@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Tariff · myenergi monitor{% endblock %}
+{% block content %}
+<h1>Tariff</h1>
+<p class="muted">Your electricity rates, used to cost the energy you import from the grid. Add a rate for each part
+  of the day (times are {{ tz_name }}). Rates can run past midnight and can overlap: where they overlap, the
+  cheapest applies. Together they must cover all 24 hours.</p>
+
+{% if errors %}<div class="error" role="alert">{% for e in errors %}<div>{{ e }}</div>{% endfor %}</div>{% endif %}
+{% if saved %}<p class="notice" role="status">Tariff saved. <a href="{{ url_for('energy_page') }}">See your costs on the Energy tab</a>.</p>{% endif %}
+
+<form method="post" class="tariff-form">
+  <label class="currency">Currency <input type="text" name="currency" value="{{ t.currency }}" maxlength="8" required placeholder="£ or GBP"></label>
+
+  <div class="table-scroll"><table class="rates">
+    <thead><tr><th>Name</th><th>From</th><th>To</th><th>Price per kWh</th><th></th></tr></thead>
+    <tbody id="rates">
+    {% for r in t.rates %}
+      <tr>
+        <td><input type="text" name="name" value="{{ r.name }}" maxlength="40" placeholder="e.g. Night"></td>
+        <td><input type="time" name="start" value="{{ r.start }}"></td>
+        <td><input type="time" name="end" value="{{ r.end }}"></td>
+        <td><input type="number" name="price" value="{{ '%g' % r.price if r.price is not none else '' }}" min="0" max="100" step="any" placeholder="0.245"></td>
+        <td><button type="button" class="secondary small-btn remove" aria-label="Remove this rate">Remove</button></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <div class="row">
+    <button type="button" class="secondary" id="add-rate">Add a rate</button>
+    <button type="submit">Save tariff</button>
+  </div>
+</form>
+
+{% if schedule %}
+<h2>How each part of the day is charged</h2>
+<table class="schedule">
+  <thead><tr><th>From</th><th>To</th><th>Rate</th><th class="num">Price per kWh</th></tr></thead>
+  <tbody>
+  {% for s, e, name, price in schedule %}
+    <tr><td>{{ s }}</td><td>{{ e }}</td><td>{{ name }}</td><td class="num">{{ '%g' % price }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<template id="rate-row">
+  <tr>
+    <td><input type="text" name="name" maxlength="40" placeholder="e.g. Nightboost"></td>
+    <td><input type="time" name="start"></td>
+    <td><input type="time" name="end"></td>
+    <td><input type="number" name="price" min="0" max="100" step="any" placeholder="0.245"></td>
+    <td><button type="button" class="secondary small-btn remove" aria-label="Remove this rate">Remove</button></td>
+  </tr>
+</template>
+<script>
+  (function () {
+    const body = document.getElementById("rates"), tpl = document.getElementById("rate-row");
+    document.getElementById("add-rate").addEventListener("click", () => {
+      body.appendChild(tpl.content.cloneNode(true));
+      body.lastElementChild.querySelector("input").focus();
+    });
+    body.addEventListener("click", (e) => {
+      const b = e.target.closest("button.remove");
+      if (b) b.closest("tr").remove();
+    });
+  })();
+</script>
+{% endblock %}

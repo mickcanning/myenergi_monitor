@@ -914,6 +914,66 @@ def test_quick_ranges_merge_into_all_data(tmp_path):
     assert "Last 7 days" not in html and "Last 31 days" not in html
 
 
+def test_tariff_rules():
+    import tariff
+    t, err = tariff.parse("£", ["Day", "Night", "Nightboost"], ["08:00", "23:00", "02:00"],
+                          ["23:00", "08:00", "04:00"], ["0.30", "0.10", "0.05"])
+    assert not err
+    tab = tariff.table(t)
+    assert tab[1 * 60] == (0.10, 1) and tab[3 * 60] == (0.05, 2) and tab[12 * 60] == (0.30, 0)   # cheapest wins
+    assert tariff.schedule(t) == [("00:00", "02:00", "Night", 0.10), ("02:00", "04:00", "Nightboost", 0.05),
+                                  ("04:00", "08:00", "Night", 0.10), ("08:00", "23:00", "Day", 0.30),
+                                  ("23:00", "00:00", "Night", 0.10)]
+    # gaps are refused and named; blank rows are ignored; bad values are explained
+    _, err = tariff.parse("£", ["Day", ""], ["08:00", ""], ["20:00", ""], ["0.3", ""])
+    assert err == ["The rates must cover all 24 hours. Not covered: 00:00-08:00, 20:00-00:00."]
+    _, err = tariff.parse("", ["X"], ["8am"], ["09:00"], ["cheap"])
+    assert len(err) == 3
+    _, err = tariff.parse("£", ["All day"], ["00:00"], ["00:00"], ["0.2"])          # start == end: whole day
+    assert not err
+    assert tariff.money(3.456, "£") == "£3.46" and tariff.money(3.456, "GBP") == "£3.46"
+    assert tariff.money(3.456, "kr") == "3.46 kr"
+
+
+def test_tariff_costs_and_pages(tmp_path):
+    from datetime import datetime as dt
+    from zoneinfo import ZoneInfo
+    import tariff
+    tz = ZoneInfo("Europe/London")
+    a = make_app(tmp_path)
+    st = a.extensions["store"]
+    c = a.test_client()
+    # the tariff page: defaults, a refused tariff with a gap, then a saved one
+    assert "Day" in c.get("/settings/tariff").get_data(as_text=True)
+    r = c.post("/settings/tariff", data={"currency": "£", "name": ["Day"], "start": ["08:00"], "end": ["20:00"],
+                                         "price": ["0.3"]})
+    assert r.status_code == 400 and "Not covered" in r.get_data(as_text=True)
+    r = c.post("/settings/tariff", data={"currency": "£", "name": ["Day", "Night", "Nightboost"],
+                                         "start": ["08:00", "23:00", "02:00"], "end": ["23:00", "08:00", "04:00"],
+                                         "price": ["0.30", "0.10", "0.05"]})
+    assert r.status_code == 200 and "Tariff saved" in r.get_data(as_text=True)
+    assert tariff.load(st)["rates"][2]["name"] == "Nightboost"
+
+    # 1 kW imported all day on 1 Dec (GMT): 2 h Nightboost, 7 h Night, 15 h Day
+    d0 = int(dt(2026, 12, 1, tzinfo=tz).timestamp())
+    st.save_minutes("2026-12-01", [(m, 1000 * 60, 0, 0, 0, 0) for m in range(d0, d0 + 86400, 60)], complete=True)
+    buckets = [(d0 + h * 3600, d0 + (h + 1) * 3600) for h in range(24)]
+    per = tariff.costs(st, tariff.load(st), buckets, d0 + 86400, tz)
+    assert abs(per[3]["cost"] - 0.05) < 1e-9 and abs(per[5]["cost"] - 0.10) < 1e-9 and abs(per[12]["cost"] - 0.30) < 1e-9
+    assert abs(sum(p["cost"] for p in per) - (2 * 0.05 + 7 * 0.10 + 15 * 0.30)) < 1e-6
+    # British Summer Time: the rates follow the clock, so 1 kW at 02:30 BST is Nightboost
+    s0 = int(dt(2026, 7, 1, 2, 30, tzinfo=tz).timestamp())
+    st.save_minutes("2026-07-01", [(m, 1000 * 60, 0, 0, 0, 0) for m in range(s0, s0 + 600, 60)], complete=True)
+    per = tariff.costs(st, tariff.load(st), [(s0, s0 + 600)], s0 + 600, tz)
+    assert per[0]["by_rate"] == {"Nightboost": (per[0]["kwh"], per[0]["cost"])} and abs(per[0]["cost"] - 0.05 / 6) < 1e-9
+
+    # the Energy tab shows the cost
+    a.config["NOW"] = d0 + 86400 + 3600
+    html = c.get("/energy?period=day&date=2026-12-01").get_data(as_text=True)
+    assert "Cost of import" in html and "£5.30" in html and "Cost of grid import" in html and "Nightboost" in html
+    assert 'class="cbar"' in html
+
+
 if __name__ == "__main__":
     import tempfile
     for fn in (test_dashboard_and_api, test_upload_and_report, test_current_report_persists,
@@ -925,7 +985,7 @@ if __name__ == "__main__":
                test_history_sync, test_estimate_overnight_battery_charging, test_minutes_table_upgrade,
                test_quiet_solar_harvi_counts_as_zero, test_harvi_signal_metrics, test_signal_page_and_change_log,
                test_tank_temp_only_shown_once_it_changes, test_ember_tank_temperature,
-               test_quick_ranges_merge_into_all_data):
+               test_quick_ranges_merge_into_all_data, test_tariff_costs_and_pages):
         with tempfile.TemporaryDirectory() as d:
             fn(Path(d))
             print("ok", fn.__name__)
@@ -933,6 +993,8 @@ if __name__ == "__main__":
     print("ok test_load_log_errors")
     test_chart_with_a_single_poll_is_quick()
     print("ok test_chart_with_a_single_poll_is_quick")
+    test_tariff_rules()
+    print("ok test_tariff_rules")
     test_format_duration()
     print("ok test_format_duration")
     test_flow_values()

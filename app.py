@@ -17,6 +17,7 @@ import charts
 import ember
 import energy
 import harvi_signal
+import tariff as tariffs
 import flow
 import recorder
 from auth import init_auth
@@ -259,11 +260,31 @@ def create_app(test_config=None):
         except ValueError:
             day = today
         s = energy.summarise(store, period, day, tz, now_ts)
+        energy.add_costs(s, tariffs.load(store), lambda t, b: tariffs.costs(store, t, b, now_ts, tz))
         nav = {"prev": energy.shift(period, day, -1).isoformat(), "next": energy.shift(period, day, 1).isoformat(),
                "today": today.isoformat(), "has_next": not s["in_progress"] and not s["future"],
                "is_now": s["in_progress"]}
         return render_template("energy.html", s=s, ch=energy.chart(s), nav=nav, day=day.isoformat(),
-                               tz_name=app.config["TIMEZONE"], periods=energy.PERIODS)
+                               tz_name=app.config["TIMEZONE"], periods=energy.PERIODS, money=tariffs.money)
+
+    @app.route("/settings/tariff", methods=["GET", "POST"])
+    def tariff_settings():
+        """The electricity tariff: currency plus any number of named rates (time range, price per kWh)."""
+        errors, saved = [], False
+        if request.method == "POST":
+            f = request.form
+            t, errors = tariffs.parse(f.get("currency"), f.getlist("name"), f.getlist("start"),
+                                      f.getlist("end"), f.getlist("price"))
+            if not errors:
+                tariffs.save(store, t)
+                saved = True
+        else:
+            t = tariffs.load(store) or {"currency": "£", "rates": [
+                {"name": "Day", "start": "08:00", "end": "23:00", "price": None},
+                {"name": "Night", "start": "23:00", "end": "08:00", "price": None}]}
+        return render_template("tariff.html", t=t, errors=errors, saved=saved,
+                               schedule=tariffs.schedule(t) if not errors else [],
+                               tz_name=app.config["TIMEZONE"]), (400 if errors else 200)
 
     @app.get("/live")
     def dashboard():

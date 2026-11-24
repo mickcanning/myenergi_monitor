@@ -53,6 +53,14 @@
       <b class="import-total">{{ '%.1f' % im.imp }} <small>kWh</small></b></span>
     <span class="muted">Exported {{ '%.1f' % im.exp }} kWh · measured by the hub, as in the myenergi app</span>
   </div>
+  {% if s.cost %}
+  <div class="cost-line">
+    <span><span class="stat-label">Cost of import</span> <b class="import-total">{{ money(s.cost.total, s.cost.currency) }}</b></span>
+    <span class="cost-rates">{% for name, (k, v) in s.cost.by_rate %}<span>{{ name }} <b>{{ '%.1f' % k }} kWh</b> · {{ money(v, s.cost.currency) }}</span>{% endfor %}</span>
+  </div>
+  {% else %}
+  <p class="muted small-note"><a href="{{ url_for('tariff_settings') }}">Set your tariff</a> to see what the import cost.</p>
+  {% endif %}
   {% if im.imp >= 0.005 %}
   {% set parts = [('home', 'Used by the home', im.home), ('batt', 'Charged the battery', im.batt),
                   ('dev', 'Hot water & car', im.dev), ('unattr', 'Not attributed', im.unattr)] %}
@@ -111,6 +119,20 @@
     </svg>
     <div class="band" hidden></div>
   </div>
+  {% if s.cost %}
+  <div class="panel-title">Cost of grid import <span class="muted">{{ s.cost.currency }} per {{ s.bucket_word }}</span>
+    <span class="legend"><span>Total <b>{{ money(s.cost.total, s.cost.currency) }}</b></span></span>
+  </div>
+  <div class="eplot costs">
+    {% for t in ch.cost_ticks %}<span class="ytick" style="top:{{ t.y }}%">{{ money(t.v, s.cost.currency, 2 if t.v < 10 else 0) }}</span>{% endfor %}
+    <svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
+      {% for t in ch.cost_ticks %}<line class="grid" x1="0" x2="1000" y1="{{ t.y }}" y2="{{ t.y }}"/>{% endfor %}
+      {% for b in ch.cost_bars %}<rect class="cbar" x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}"/>{% endfor %}
+      <line class="axis" x1="0" x2="1000" y1="100" y2="100"/>
+    </svg>
+    <div class="band" hidden></div>
+  </div>
+  {% endif %}
   {% if ch.tank %}
   <div class="panel-title">Hot water tank <span class="muted">°C · from the heating system's probe</span></div>
   <div class="eplot tank">
@@ -178,6 +200,9 @@
     const word = {{ s.bucket_word | tojson }}, period = {{ s.period | tojson }};
     const uses = {{ ch.shown | tojson }};
     const fmt = (v) => (v < 10 ? v.toFixed(2) : v.toFixed(1)) + " kWh";
+    const cur = {{ (s.cost.currency if s.cost else "") | tojson }};
+    const sym = ({GBP: "£", EUR: "€", USD: "$"})[cur.toUpperCase()] || cur;
+    const money = (v) => (sym.length <= 2 && !/^[A-Za-z]+$/.test(sym)) ? sym + v.toFixed(2) : v.toFixed(2) + " " + sym;
     function show(e) {
       const r = plots[0].getBoundingClientRect();
       const i = Math.max(0, Math.min(n - 1, Math.floor((e.clientX - r.left) / r.width * n)));
@@ -199,6 +224,8 @@
           (d.i[4] >= 0.005 ? `<div class="row-dev"><i></i>to hot water &amp; car <b>${fmt(d.i[4])}</b></div>` : "") +
           (d.i[5] >= 0.005 ? `<div class="row-unattr"><i></i>not attributed <b>${fmt(d.i[5])}</b></div>` : "") : "") +
         (d.i && d.i[1] >= 0.005 ? `<div class="muted">Exported ${fmt(d.i[1])}</div>` : "") +
+        (d["$"] != null ? `<div class="tip-gap">Import cost <b>${money(d["$"])}</b></div>` +
+          (d["$r"] || []).map(([n, k, v]) => `<div class="muted">${n.replace(/[<>&]/g, "")}: ${fmt(k)} · ${money(v)}</div>`).join("") : "") +
         (d.p != null && d.p < 90 ? `<div class="muted">Data for ${d.p}% of this ${word}</div>` :
          d.ms != null && d.ms < 90 ? `<div class="muted">Hub-measured for ${d.ms}% of this ${word}</div>` : ""));
       tip.hidden = false;

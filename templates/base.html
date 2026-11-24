@@ -41,6 +41,7 @@
           </select>
         </label>
         {% if request.endpoint != 'login' %}
+        <a class="settings-row" href="{{ url_for('tariff_settings') }}">Tariff</a>
         <a class="settings-row" href="{{ url_for('upload') }}">Upload a monitor.py log</a>
         {% endif %}
         {% if auth_enabled and signed_in %}

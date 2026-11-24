@@ -322,3 +322,19 @@ a.settings-row:hover { background:var(--surface); }
 .eplot .room-end.room0, .energy-chart .legend i.room0, .energy-chart .row-room0 i { background:var(--room0); }
 .eplot .room-end.room1, .energy-chart .legend i.room1, .energy-chart .row-room1 i { background:var(--room1); }
 .energy-chart .row-room0 i, .energy-chart .row-room1 i { border-radius:50%; }
+/* Tariff settings */
+.tariff-form .currency { max-width:10rem; margin:1rem 0 .6rem; }
+.tariff-form table.rates input { width:100%; min-width:6rem; }
+.tariff-form table.rates td { vertical-align:middle; }
+.tariff-form table.rates td:first-child input { min-width:9rem; }
+.tariff-form .row { margin-top:.8rem; }
+table.schedule { max-width:36rem; }
+/* Cost of grid import */
+.cost-line { display:flex; flex-wrap:wrap; align-items:baseline; gap:.3rem 1.2rem; margin-top:.7rem; padding-top:.6rem; border-top:1px solid var(--line); }
+.cost-line > span:first-child { display:flex; align-items:baseline; gap:.6rem; }
+.cost-rates { display:flex; flex-wrap:wrap; gap:.2rem 1.2rem; font-size:.85em; color:var(--ink2); }
+.cost-rates b { color:var(--ink); font-weight:600; font-variant-numeric:tabular-nums; }
+.eplot.costs { height:110px; margin-bottom:0; }
+.eplot.costs:has(+ .panel-title) { margin-bottom:1.1rem; }
+.eplot .cbar { fill:var(--imp-home); }
+.energy-chart .legend b { color:var(--ink); }
