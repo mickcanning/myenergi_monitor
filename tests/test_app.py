@@ -606,7 +606,7 @@ def test_energy_page(tmp_path):
     a.config["NOW"] = 1795000000 + 3 * 3600
     c = a.test_client()
     html = c.get("/energy").get_data(as_text=True)
-    assert "Home energy use" in html and "Energy usage" in html and ">Running total <" not in html and "Per half hour" in html
+    assert "Home energy use" in html and "Energy usage" in html and ">Running total <" not in html and "Home energy source" in html
     assert 'class="use-area use-home"' in html and 'class="use-area use-charge"' in html   # battery charging layer
     # this data imports 4 kW against 4 kW of demand (home, hot water, battery charging): all from the grid
     assert "From solar &amp; battery" in html and 'class="bar grid' in html and 'class="bar solar' not in html
@@ -855,6 +855,7 @@ class FakeEmber:
         if self.tank is None:
             return None
         return [{"name": "Downstairs", "current": 21.2, "target": 23.0, "active": False, "hot_water": False},
+                {"name": "Upstairs", "current": 21.4, "target": 23.0, "active": False, "hot_water": False},
                 {"name": "Hot Water", "current": self.tank, "target": 60.0, "active": True, "hot_water": True}]
 
 
@@ -867,7 +868,9 @@ def test_ember_tank_temperature(tmp_path):
     a.extensions["client"] = FakeClient()
     fake = a.extensions["ember"] = FakeEmber()
     c = a.test_client()
-    assert "Tank 61 °C" in c.get("/").get_data(as_text=True)            # read straight from Ember
+    html = c.get("/").get_data(as_text=True)
+    assert "Tank 61 °C" in html                                         # read straight from Ember
+    assert "Downstairs 21.2 °C" in html and "Upstairs 21.4 °C" in html   # rooms on the Home node
     fake.tank = None                                                     # Ember down: the rest still works
     html = c.get("/").get_data(as_text=True)
     assert "Tank" not in html and "Hot water" in html
@@ -886,7 +889,10 @@ def test_ember_tank_temperature(tmp_path):
     # the Energy tab draws the tank's temperature and gives each slot's range in the tooltip
     a.config["NOW"] = t0 + 900
     html = c.get("/energy").get_data(as_text=True)
-    assert "Hot water tank" in html and 'class="tank-line"' in html and '"t": [55.0, 59.0]' in html   # 55, 57, 59 in one half hour
+    assert html.index("Grid import per") < html.index("Hot water tank")     # the tank chart comes last
+    assert "Hot water tank" in html and 'class="tank-line"' in html
+    assert "Home temperatures" in html and 'class="room-line room1"' in html and '"Upstairs": 21.4' in html
+    assert html.index("Hot water tank") < html.index("Home temperatures") and '"t": [55.0, 59.0]' in html   # 55, 57, 59 in one half hour
 
 
 def test_chart_with_a_single_poll_is_quick():

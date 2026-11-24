@@ -201,7 +201,7 @@ def _link(pos, w, outward, cls):
             "active": active, "cls": cls if active else "idle"}
 
 
-def build(status, show_tank_temp=False, tank=None):
+def build(status, show_tank_temp=False, tank=None, rooms=None):
     """Everything the Overview template draws."""
     v = compute(status)
     nodes = []
@@ -234,7 +234,9 @@ def build(status, show_tank_temp=False, tank=None):
     for k, x in zip(bottom, xs):
         w, y = v[k], 318
         if k == "home":
-            add(k, (x, y), "Home", w, ["Using" if w >= IDLE_W else "Idle"], True, "load", False)
+            cap = [f"{r['name']} {r['current']:.1f} °C" for r in (rooms or [])[:2]] or \
+                ["Using" if w >= IDLE_W else "Idle"]           # room temperatures from the heating system
+            add(k, (x, y), "Home", w, cap, True, "load", False)
         elif k == "eddi":
             add(k, (x, y), "Hot water", w, _eddi_caption(v["eddi_rec"], show_tank_temp, tank), True, "load", False)
         else:

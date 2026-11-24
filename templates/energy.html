@@ -86,21 +86,7 @@
     </svg>
     <div class="band" hidden></div>
   </div>
-  {% if ch.tank %}
-  <div class="panel-title">Hot water tank <span class="muted">°C · from the heating system's probe</span></div>
-  <div class="eplot tank">
-    {% for tk in ch.tank.ticks %}<span class="ytick" style="top:{{ tk.y }}%">{{ tk.text }}</span>{% endfor %}
-    <svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
-      {% for tk in ch.tank.ticks %}<line class="grid" x1="0" x2="1000" y1="{{ tk.y }}" y2="{{ tk.y }}"/>{% endfor %}
-      {% for sg in ch.tank.segs %}<polyline class="tank-line" points="{{ sg }}"/>{% endfor %}
-      <line class="axis" x1="0" x2="1000" y1="100" y2="100"/>
-    </svg>
-    <i class="tank-end" style="left:{{ ch.tank.last.x }}%; top:{{ ch.tank.last.y }}%"></i>
-    <span class="cum-label" style="{{ 'right:' ~ (100 - ch.tank.last.x) ~ '%' if ch.tank.last.x > 50 else 'left:' ~ ch.tank.last.x ~ '%' }}; top:{{ ch.tank.last.y }}%">{{ '%.0f' % ch.tank.last.v }} °C</span>
-    <div class="band" hidden></div>
-  </div>
-  {% endif %}
-  <div class="panel-title">Per {{ s.bucket_word }} <span class="muted">kWh</span>
+  <div class="panel-title">Home energy source <span class="muted">kWh per {{ s.bucket_word }}</span>
     <span class="legend"><span><i class="solar"></i>Solar &amp; battery {{ '%.1f' % s.total_solar }}</span><span><i class="grid"></i>Grid {{ '%.1f' % s.total_grid }}</span></span>
   </div>
   <div class="eplot bars">
@@ -125,6 +111,35 @@
     </svg>
     <div class="band" hidden></div>
   </div>
+  {% if ch.tank %}
+  <div class="panel-title">Hot water tank <span class="muted">°C · from the heating system's probe</span></div>
+  <div class="eplot tank">
+    {% for tk in ch.tank.ticks %}<span class="ytick" style="top:{{ tk.y }}%">{{ tk.text }}</span>{% endfor %}
+    <svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
+      {% for tk in ch.tank.ticks %}<line class="grid" x1="0" x2="1000" y1="{{ tk.y }}" y2="{{ tk.y }}"/>{% endfor %}
+      {% for sg in ch.tank.lines[0].segs %}<polyline class="tank-line" points="{{ sg }}"/>{% endfor %}
+      <line class="axis" x1="0" x2="1000" y1="100" y2="100"/>
+    </svg>
+    <i class="tank-end" style="left:{{ ch.tank.last.x }}%; top:{{ ch.tank.last.y }}%"></i>
+    <span class="cum-label" style="{{ 'right:' ~ (100 - ch.tank.last.x) ~ '%' if ch.tank.last.x > 50 else 'left:' ~ ch.tank.last.x ~ '%' }}; top:{{ ch.tank.last.y }}%">{{ '%.0f' % ch.tank.last.v }} °C</span>
+    <div class="band" hidden></div>
+  </div>
+  {% endif %}
+  {% if ch.rooms %}
+  <div class="panel-title">Home temperatures <span class="muted">°C · from the heating system</span>
+    <span class="legend">{% for l in ch.rooms.lines %}<span><i class="room{{ loop.index0 }}"></i>{{ l.key }} {{ '%.1f' % l.last.v }}°</span>{% endfor %}</span>
+  </div>
+  <div class="eplot rooms">
+    {% for tk in ch.rooms.ticks %}<span class="ytick" style="top:{{ tk.y }}%">{{ tk.text }}</span>{% endfor %}
+    <svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
+      {% for tk in ch.rooms.ticks %}<line class="grid" x1="0" x2="1000" y1="{{ tk.y }}" y2="{{ tk.y }}"/>{% endfor %}
+      {% for l in ch.rooms.lines %}{% set k = loop.index0 %}{% for sg in l.segs %}<polyline class="room-line room{{ k }}" points="{{ sg }}"/>{% endfor %}{% endfor %}
+      <line class="axis" x1="0" x2="1000" y1="100" y2="100"/>
+    </svg>
+    {% for l in ch.rooms.lines %}<i class="room-end room{{ loop.index0 }}" style="left:{{ l.last.x }}%; top:{{ l.last.y }}%"></i>{% endfor %}
+    <div class="band" hidden></div>
+  </div>
+  {% endif %}
   <div class="xaxis">{% for l in ch.xlabels %}<span {% if l.minor %}class="minor" {% endif %}style="left:{{ l.x }}%">{{ l.text }}</span>{% endfor %}</div>
   <div class="tip" hidden></div>
   <figcaption class="muted">
@@ -172,6 +187,7 @@
         uses.map((u, j) => (j === 0 || d.u[j] >= 0.005) ?
           `<div class="row-use-${u.key}"><i></i>${u.label} <b>${fmt(d.u[j])}</b>` +
           (j === 0 && d.e >= 0.005 ? ` <span class="muted">± ${d.e.toFixed(2)}</span>` : "") + `</div>` : "").join("") +
+        (d.rm ? Object.entries(d.rm).map(([n, v], j) => `<div class="row-room${j}"><i></i>${n.replace(/[<>&]/g, "")} <b>${v.toFixed(1)} °C</b></div>`).join("") : "") +
         (d.t ? `<div class="row-tank"><i></i>Tank <b>${d.t[0] === d.t[1] ? d.t[0].toFixed(0) : d.t[0].toFixed(0) + "–" + d.t[1].toFixed(0)} °C</b></div>` : "") +
         `<div class="tip-gap muted">Home's energy came from</div>` +
         `<div class="row-solar"><i></i>Solar &amp; battery <b>${fmt(d.s)}</b></div>` +

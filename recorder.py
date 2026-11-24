@@ -262,6 +262,25 @@ class Store:
             "SELECT ts, current, target, active FROM temps WHERE hot_water = 1 AND ts >= ? AND ts < ? ORDER BY ts",
             (int(start_ts), int(end_ts))).fetchall()
 
+    def room_temps(self, start_ts, end_ts):
+        """{zone name: [(ts, current)]} for the heating (non hot water) zones in [start, end)."""
+        out = {}
+        for ts, zone, cur in self._conn().execute(
+                "SELECT ts, zone, current FROM temps WHERE hot_water = 0 AND current IS NOT NULL AND ts >= ? AND ts < ? "
+                "ORDER BY zone, ts", (int(start_ts), int(end_ts))):
+            out.setdefault(zone, []).append((ts, cur))
+        return out
+
+    def latest_temps(self):
+        """(ts, [{name, current, target, active, hot_water}]) from the newest Ember reading, or None."""
+        c = self._conn()
+        ts = c.execute("SELECT MAX(ts) FROM temps").fetchone()[0]
+        if ts is None:
+            return None
+        return ts, [{"name": z, "current": cur, "target": tgt, "active": bool(act), "hot_water": bool(hw)}
+                    for z, cur, tgt, act, hw in c.execute(
+                        "SELECT zone, current, target, active, hot_water FROM temps WHERE ts = ? ORDER BY zone", (ts,))]
+
     def latest_tank_temp(self):
         """(ts, current, target, active) of the newest hot water reading, or None."""
         return self._conn().execute(

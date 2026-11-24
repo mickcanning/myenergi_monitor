@@ -308,3 +308,17 @@ a.settings-row:hover { background:var(--surface); }
 .settings-row select { padding:.2rem .4rem; }
 .settings-row.signout { margin:0; padding-top:.5rem; border-top:1px solid var(--line); border-radius:0; }
 .settings-row.signout button { width:100%; }
+/* the tank chart sits at the bottom, below grid import, just above the shared time axis */
+.eplot.imports:has(+ .panel-title) { margin-bottom:1.1rem !important; }
+.eplot.tank { margin-bottom:0; }
+.eplot.tank:has(+ .panel-title) { margin-bottom:1.1rem; }
+/* Home (room) temperatures from the heating system: blue and magenta, checked for colour-blind separation */
+.energy-chart { --room0:#2a78d6; --room1:#e87ba4; }
+:root[data-theme="dark"] .energy-chart { --room0:#3987e5; --room1:#d55181; }
+.eplot.rooms { height:100px; margin-bottom:0; }
+.eplot .room-line { fill:none; stroke-width:2; vector-effect:non-scaling-stroke; stroke-linejoin:round; }
+.eplot .room-line.room0 { stroke:var(--room0); } .eplot .room-line.room1 { stroke:var(--room1); }
+.eplot .room-end { position:absolute; width:8px; height:8px; margin:-4px 0 0 -4px; border-radius:50%; box-shadow:0 0 0 2px var(--card); }
+.eplot .room-end.room0, .energy-chart .legend i.room0, .energy-chart .row-room0 i { background:var(--room0); }
+.eplot .room-end.room1, .energy-chart .legend i.room1, .energy-chart .row-room1 i { background:var(--room1); }
+.energy-chart .row-room0 i, .energy-chart .row-room1 i { border-radius:50%; }

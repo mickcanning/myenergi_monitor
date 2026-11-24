@@ -142,6 +142,14 @@ def summarise(store, period, day, tz, now_ts):
     for r in rows:
         vals = [t[1] for t in tank if r["start"] <= t[0] < r["end"]]
         r["tank"] = (round(min(vals), 1), round(max(vals), 1)) if vals else None
+    rooms = store.room_temps(lo, min(hi, now_ts + 1))
+    for r in rows:
+        avg = {}
+        for name, pts in rooms.items():
+            vals = [v for t, v in pts if r["start"] <= t < r["end"]]
+            if vals:
+                avg[name] = round(sum(vals) / len(vals), 1)
+        r["rooms"] = avg or None
     past = [r for r in rows if r["kwh"] is not None]
     spans = [min(r["end"], now_ts) - r["start"] for r in past]
     span = sum(spans)
@@ -153,7 +161,7 @@ def summarise(store, period, day, tz, now_ts):
             "coverage": sum(r["coverage"] * w for r, w in zip(past, spans)) / span if span else 0.0,
             "measured": sum(r["measured"] * w for r, w in zip(past, spans)) / span if span else 0.0,
             "busiest": busiest, "in_progress": lo <= now_ts < hi, "future": lo > now_ts,
-            "tank": tank, "lo": lo, "hi": hi,
+            "tank": tank, "rooms": rooms, "lo": lo, "hi": hi,
             "uses": use_cum, "uses_total": sum(use_cum.values()),
             "imports": {**imp_t, "unattr": max(imp_t["imp"] - imp_t["home"] - imp_t["batt"] - imp_t["dev"], 0.0)},
             "bucket_word": BUCKET_WORD[period]}
@@ -278,37 +286,10 @@ def chart(s):
             parts.append({"cls": cls, "y": y_hi, "h": round(bottom - y_hi, 2)})
         imp_bars.append({"x": x, "w": w, "parts": parts})
 
-    # tank temperature line, averaged into at most ~500 points and broken across gaps of over 30 minutes
-    tank_chart = None
-    if s.get("tank"):
-        lo_t, hi_t = s["lo"], s["hi"]
-        width = max(300, (hi_t - lo_t) / 500)
-        bins = {}
-        for ts, cur, *_ in s["tank"]:
-            bins.setdefault(int((ts - lo_t) // width), []).append((ts, cur))
-        pts = [(sum(t for t, _ in v) / len(v), sum(c for _, c in v) / len(v)) for _, v in sorted(bins.items())]
-        t_min, t_max = min(c for _, c in pts), max(c for _, c in pts)
-        lo_v, hi_v = math.floor((t_min - 2) / 10) * 10, math.ceil((t_max + 2) / 10) * 10
-        if hi_v - lo_v < 20:
-            hi_v = lo_v + 20
-
-        def ty(v):
-            return round(100 - (v - lo_v) / (hi_v - lo_v) * 100, 2)
-
-        segs, cur_seg, prev = [], [], None
-        for t, v in pts:
-            if prev is not None and t - prev > max(1800, 2 * width):
-                segs.append(cur_seg)
-                cur_seg = []
-            cur_seg.append(f"{round((t - lo_t) / (hi_t - lo_t) * 1000, 1)},{ty(v)}")
-            prev = t
-        segs.append(cur_seg)
-        last_t, last_v = s["tank"][-1][0], s["tank"][-1][1]
-        step = 10 if hi_v - lo_v <= 40 else 20
-        tank_chart = {"segs": [" ".join(sg) for sg in segs if sg],
-                      "ticks": [{"y": ty(v), "text": f"{v}°"} for v in range(lo_v + step, hi_v + 1, step)],
-                      "last": {"x": round((last_t - lo_t) / (hi_t - lo_t) * 100, 2), "y": ty(last_v), "v": last_v},
-                      "min": t_min, "max": t_max}
+    tank_chart = temp_chart([("tank", [(t, c) for t, c, *_ in s["tank"]])], s["lo"], s["hi"], pad=2, round_to=10) \
+        if s.get("tank") else None
+    rooms_chart = temp_chart(sorted(s["rooms"].items()), s["lo"], s["hi"], pad=1, round_to=2) \
+        if s.get("rooms") else None
 
     def ticks(mx, step):
         out, v = [], step
@@ -319,7 +300,7 @@ def chart(s):
 
     last = pts[-1] if len(pts) > 1 else None
     return {"line": line, "area": area, "band": band, "bars": bars, "xlabels": xlabels, "n": n,
-            "layers": layers, "use_ticks": ticks(use_max, use_step), "tank": tank_chart,
+            "layers": layers, "use_ticks": ticks(use_max, use_step), "tank": tank_chart, "rooms": rooms_chart,
             "cum_ticks": ticks(cum_max, cum_step), "bar_ticks": ticks(bar_max, bar_step),
             "imp_bars": imp_bars, "imp_ticks": ticks(imp_max, imp_step),
             "last": {"x": last[0] / 10, "y": last[1]} if last else None,
@@ -329,7 +310,7 @@ def chart(s):
                        "i": None if r["imp"] is None else [round(r[k] or 0, 3) for k in
                                                            ("imp", "exp", "imp_home", "imp_batt", "imp_dev", "imp_unattr")],
                        "e": None if r["err"] is None else round(r["err"], 3),
-                       "t": r.get("tank"),
+                       "t": r.get("tank"), "rm": r.get("rooms"),
                        "m": None if r["sampled"] is None else round(r["sampled"], 3),
                        "ce": None if r["cum_err"] is None else round(r["cum_err"], 3),
                        "ms": None if r["measured"] is None else round(r["measured"] * 100),
@@ -338,3 +319,45 @@ def chart(s):
                        "c": None if r["cum"] is None else round(r["cum"], 3),
                        "u": None if r["uses"] is None else [round(r["uses"][k], 3) for k in shown],
                        "p": None if r["coverage"] is None else round(r["coverage"] * 100)} for r in rows]}
+
+
+def temp_chart(series, lo_t, hi_t, pad, round_to):
+    """Temperature lines in a 1000 x 100 viewBox across [lo_t, hi_t]: each series is (key, [(ts, °C)]), averaged
+    into at most ~500 points and broken across gaps of over 30 minutes. One shared axis, rounded out to
+    `round_to` degrees with `pad` degrees of headroom."""
+    width = max(300, (hi_t - lo_t) / 500)
+    binned = []
+    for key, pts in series:
+        bins = {}
+        for ts, v in pts:
+            bins.setdefault(int((ts - lo_t) // width), []).append((ts, v))
+        binned.append((key, [(sum(t for t, _ in b) / len(b), sum(v for _, v in b) / len(b))
+                             for _, b in sorted(bins.items())], pts[-1]))
+    vals = [v for _, pts, _ in binned for _, v in pts]
+    if not vals:
+        return None
+    lo_v = math.floor((min(vals) - pad) / round_to) * round_to
+    hi_v = math.ceil((max(vals) + pad) / round_to) * round_to
+    if hi_v - lo_v < 2 * round_to:
+        hi_v = lo_v + 2 * round_to
+
+    def ty(v):
+        return round(100 - (v - lo_v) / (hi_v - lo_v) * 100, 2)
+
+    lines = []
+    for key, pts, (last_t, last_v) in binned:
+        segs, cur, prev = [], [], None
+        for t, v in pts:
+            if prev is not None and t - prev > max(1800, 2 * width):
+                segs.append(cur)
+                cur = []
+            cur.append(f"{round((t - lo_t) / (hi_t - lo_t) * 1000, 1)},{ty(v)}")
+            prev = t
+        segs.append(cur)
+        lines.append({"key": key, "segs": [" ".join(sg) for sg in segs if sg],
+                      "last": {"x": round((last_t - lo_t) / (hi_t - lo_t) * 100, 2), "y": ty(last_v), "v": last_v}})
+    span = hi_v - lo_v
+    step = next(st for st in (1, 2, 5, 10, 20, 50) if span / st <= 5)
+    first = math.ceil((lo_v + 0.001) / step) * step
+    return {"lines": lines, "last": lines[0]["last"],
+            "ticks": [{"y": ty(v), "text": f"{v:g}°"} for v in range(int(first), int(hi_v) + 1, step)]}

@@ -116,15 +116,14 @@ def create_app(test_config=None):
             app.extensions["ember"] = ember.EmberClient(app.config["EMBER_EMAIL"], app.config["EMBER_PASSWORD"])
         return app.extensions["ember"]
 
-    def tank_temperature():
-        """The hot water tank's temperature from Ember (recorded within 15 minutes, else read now), or None."""
+    def ember_zones_now():
+        """Ember zones from the recorder (read within 15 minutes), else read now; None without Ember."""
         if get_ember() is None:
             return None
-        latest = store.latest_tank_temp()
-        if latest and time.time() - latest[0] < 900 and latest[1] is not None:
+        latest = store.latest_temps()
+        if latest and time.time() - latest[0] < 900:
             return latest[1]
-        hw = ember.hot_water(get_ember().zones())
-        return hw["current"] if hw else None
+        return get_ember().zones()
 
     rec = None
     if app.config["RECORD"] and app.config["HUB_SERIAL"] and app.config["API_KEY"] and not app.config.get("TESTING"):
@@ -220,7 +219,11 @@ def create_app(test_config=None):
         store.note_tank_temps(status)
         eddi = next((r for r in status.get("eddi", []) or [] if isinstance(r, dict) and "sno" in r), None)
         show_temp = bool(eddi) and store.tank_temp_varies(eddi["sno"])
-        return {"flow": flow.build(status, show_tank_temp=show_temp, tank=tank_temperature()), "devices": devices,
+        zones = ember_zones_now() or []
+        hw = ember.hot_water(zones)
+        rooms = [z for z in zones if not z["hot_water"] and z["current"] is not None]
+        return {"flow": flow.build(status, show_tank_temp=show_temp, tank=hw["current"] if hw else None,
+                                   rooms=rooms), "devices": devices,
                 "error": None,
                 "reading_utc": hub and hub["report_utc"], "reading_age": hub and hub["age_s"]}
 
