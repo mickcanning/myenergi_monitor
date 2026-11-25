@@ -291,16 +291,32 @@ def chart(s):
     rooms_chart = temp_chart(sorted(s["rooms"].items()), s["lo"], s["hi"], pad=1, round_to=2) \
         if s.get("rooms") else None
 
-    # cost of grid import per slot (when a tariff is set)
-    cost_bars, cost_ticks = [], []
+    # cost of grid import per slot (when a tariff is set), stacked by tariff band in the tariff's own order
+    cost_bars, cost_ticks, cost_rates = [], [], []
     if s.get("cost"):
+        names = []
+        for rt in (s.get("tariff") or {}).get("rates", []):
+            if rt["name"] not in names:
+                names.append(rt["name"])
+        totals = dict(s["cost"]["by_rate"])
+        names = [nm for nm in names if nm in totals] + [nm for nm in totals if nm not in names]
+        band = {nm: (f"r{i}" if i < RATE_COLOURS else "rx") for i, nm in enumerate(names)}
+        cost_rates = [{"name": nm, "cls": band[nm], "kwh": totals[nm][0], "cost": totals[nm][1]} for nm in names]
         c_max, c_step = _nice_max(max([r.get("cost") or 0 for r in rows] + [0]))
         for i, r in enumerate(rows):
-            if r.get("cost"):
-                yy = y(r["cost"], c_max)
-                if 100 - yy >= 0.3:
-                    cost_bars.append({"x": round(i * col + pad / 2, 2), "w": round(col - pad, 2), "y": yy,
-                                      "h": round(100 - yy, 2)})
+            if not r.get("cost"):
+                continue
+            parts, base = [], 0.0
+            for nm in names:
+                v = (r.get("cost_by_rate") or {}).get(nm, (0, 0))[1]
+                y_lo, y_hi = y(base, c_max), y(base + v, c_max)
+                base += v
+                if y_lo - y_hi < 0.3:                    # too thin to see
+                    continue
+                bottom = y_lo - (seam if parts and y_lo - y_hi > seam * 2 else 0)
+                parts.append({"cls": band[nm], "y": y_hi, "h": round(bottom - y_hi, 2)})
+            if parts:
+                cost_bars.append({"x": round(i * col + pad / 2, 2), "w": round(col - pad, 2), "parts": parts})
         v = c_step
         while v <= c_max + 1e-9:
             cost_ticks.append({"y": y(v, c_max), "v": v})
@@ -316,7 +332,7 @@ def chart(s):
     last = pts[-1] if len(pts) > 1 else None
     return {"line": line, "area": area, "band": band, "bars": bars, "xlabels": xlabels, "n": n,
             "layers": layers, "use_ticks": ticks(use_max, use_step), "tank": tank_chart, "rooms": rooms_chart,
-            "cost_bars": cost_bars, "cost_ticks": cost_ticks,
+            "cost_bars": cost_bars, "cost_ticks": cost_ticks, "cost_rates": cost_rates,
             "cum_ticks": ticks(cum_max, cum_step), "bar_ticks": ticks(bar_max, bar_step),
             "imp_bars": imp_bars, "imp_ticks": ticks(imp_max, imp_step),
             "last": {"x": last[0] / 10, "y": last[1]} if last else None,
@@ -380,6 +396,9 @@ def temp_chart(series, lo_t, hi_t, pad, round_to):
     first = math.ceil((lo_v + 0.001) / step) * step
     return {"lines": lines, "last": lines[0]["last"],
             "ticks": [{"y": ty(v), "text": f"{v:g}°"} for v in range(int(first), int(hi_v) + 1, step)]}
+
+
+RATE_COLOURS = 5                        # tariff bands with their own colour; any more share a grey
 
 
 def add_costs(s, tariff, cost_fn):

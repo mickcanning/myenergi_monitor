@@ -971,7 +971,10 @@ def test_tariff_costs_and_pages(tmp_path):
     a.config["NOW"] = d0 + 86400 + 3600
     html = c.get("/energy?period=day&date=2026-12-01").get_data(as_text=True)
     assert "Cost of import" in html and "£5.30" in html and "Cost of grid import" in html and "Nightboost" in html
-    assert 'class="cbar"' in html
+    # stacked by tariff band, coloured in the tariff's own order (Day, Night, Nightboost)
+    assert 'class="cbar r0"' in html and 'class="cbar r1"' in html and 'class="cbar r2"' in html
+    import re
+    assert re.findall(r'<i class="(r\d)"></i>(\w+)', html)[:3] == [("r0", "Day"), ("r1", "Night"), ("r2", "Nightboost")]
 
 
 if __name__ == "__main__":

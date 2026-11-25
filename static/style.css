@@ -336,5 +336,14 @@ table.schedule { max-width:36rem; }
 .cost-rates b { color:var(--ink); font-weight:600; font-variant-numeric:tabular-nums; }
 .eplot.costs { height:110px; margin-bottom:0; }
 .eplot.costs:has(+ .panel-title) { margin-bottom:1.1rem; }
-.eplot .cbar { fill:var(--imp-home); }
+.energy-chart { --rate0:#2a6fdb; --rate1:#e08a00; --rate2:#0f8a6a; --rate3:#d4479f; --rate4:#1d3d73; --ratex:#b8b7b2; }
+:root[data-theme="dark"] .energy-chart { --rate0:#6ea3f5; --rate1:#f0b040; --rate2:#2fb58c; --rate3:#f07cc9; --rate4:#c9d7f2; --ratex:#6b6a65; }
+.eplot .cbar.r0 { fill:var(--rate0); } .eplot .cbar.r1 { fill:var(--rate1); } .eplot .cbar.r2 { fill:var(--rate2); }
+.eplot .cbar.r3 { fill:var(--rate3); } .eplot .cbar.r4 { fill:var(--rate4); } .eplot .cbar.rx { fill:var(--ratex); }
+.energy-chart .legend i.r0, .energy-chart .row-r0 i { background:var(--rate0); }
+.energy-chart .legend i.r1, .energy-chart .row-r1 i { background:var(--rate1); }
+.energy-chart .legend i.r2, .energy-chart .row-r2 i { background:var(--rate2); }
+.energy-chart .legend i.r3, .energy-chart .row-r3 i { background:var(--rate3); }
+.energy-chart .legend i.r4, .energy-chart .row-r4 i { background:var(--rate4); }
+.energy-chart .legend i.rx, .energy-chart .row-rx i { background:var(--ratex); }
 .energy-chart .legend b { color:var(--ink); }

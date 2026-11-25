@@ -121,13 +121,13 @@
   </div>
   {% if s.cost %}
   <div class="panel-title">Cost of grid import <span class="muted">{{ s.cost.currency }} per {{ s.bucket_word }}</span>
-    <span class="legend"><span>Total <b>{{ money(s.cost.total, s.cost.currency) }}</b></span></span>
+    <span class="legend">{% for rt in ch.cost_rates %}<span><i class="{{ rt.cls }}"></i>{{ rt.name }} {{ money(rt.cost, s.cost.currency) }}</span>{% endfor %}<span>Total <b>{{ money(s.cost.total, s.cost.currency) }}</b></span></span>
   </div>
   <div class="eplot costs">
     {% for t in ch.cost_ticks %}<span class="ytick" style="top:{{ t.y }}%">{{ money(t.v, s.cost.currency, 2 if t.v < 10 else 0) }}</span>{% endfor %}
     <svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
       {% for t in ch.cost_ticks %}<line class="grid" x1="0" x2="1000" y1="{{ t.y }}" y2="{{ t.y }}"/>{% endfor %}
-      {% for b in ch.cost_bars %}<rect class="cbar" x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}"/>{% endfor %}
+      {% for b in ch.cost_bars %}{% for p in b.parts %}<rect class="cbar {{ p.cls }}" x="{{ b.x }}" y="{{ p.y }}" width="{{ b.w }}" height="{{ p.h }}"/>{% endfor %}{% endfor %}
       <line class="axis" x1="0" x2="1000" y1="100" y2="100"/>
     </svg>
     <div class="band" hidden></div>
@@ -199,6 +199,7 @@
     const plots = fig.querySelectorAll(".eplot"), bands = fig.querySelectorAll(".band"), tip = fig.querySelector(".tip");
     const word = {{ s.bucket_word | tojson }}, period = {{ s.period | tojson }};
     const uses = {{ ch.shown | tojson }};
+    const rateCls = Object.fromEntries({{ ch.cost_rates | tojson }}.map((rt) => [rt.name, rt.cls]));
     const fmt = (v) => (v < 10 ? v.toFixed(2) : v.toFixed(1)) + " kWh";
     const cur = {{ (s.cost.currency if s.cost else "") | tojson }};
     const sym = ({GBP: "£", EUR: "€", USD: "$"})[cur.toUpperCase()] || cur;
@@ -225,7 +226,8 @@
           (d.i[5] >= 0.005 ? `<div class="row-unattr"><i></i>not attributed <b>${fmt(d.i[5])}</b></div>` : "") : "") +
         (d.i && d.i[1] >= 0.005 ? `<div class="muted">Exported ${fmt(d.i[1])}</div>` : "") +
         (d["$"] != null ? `<div class="tip-gap">Import cost <b>${money(d["$"])}</b></div>` +
-          (d["$r"] || []).map(([n, k, v]) => `<div class="muted">${n.replace(/[<>&]/g, "")}: ${fmt(k)} · ${money(v)}</div>`).join("") : "") +
+          (d["$r"] || []).sort((a, b) => Object.keys(rateCls).indexOf(a[0]) - Object.keys(rateCls).indexOf(b[0]))
+            .map(([n, k, v]) => `<div class="row-${rateCls[n] || "rx"}"><i></i>${n.replace(/[<>&]/g, "")} <b>${money(v)}</b> <span class="muted">${fmt(k)}</span></div>`).join("") : "") +
         (d.p != null && d.p < 90 ? `<div class="muted">Data for ${d.p}% of this ${word}</div>` :
          d.ms != null && d.ms < 90 ? `<div class="muted">Hub-measured for ${d.ms}% of this ${word}</div>` : ""));
       tip.hidden = false;
