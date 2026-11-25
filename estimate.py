@@ -171,6 +171,13 @@ def half_hours(store, start, end, now):
     """Like compute(), using cached results for half hours that are final (their day's measured history is
     complete), and caching any newly final ones."""
     start, end = int(start) // HH * HH, -(-int(end) // HH) * HH
+    first = store.first_flow_poll()
+    if first is not None:
+        # the hub's history is backfilled for days before recording began (for the car page), but home use
+        # needs our solar & battery samples, so the estimate starts on the first recorded (UTC) day
+        start = max(start, first // 86400 * 86400)
+        if start >= end:
+            return {}
     final_until = min(store.complete_until() or 0, now - 3600)
     cached = store.cached_hh(start, min(end, final_until))
     out = {hh: v for hh, v in cached.items()}

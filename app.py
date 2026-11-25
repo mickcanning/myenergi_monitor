@@ -1,5 +1,6 @@
 """myenergi monitor: live device values from the myenergi API, and report charts from monitor.py logs."""
 import json
+import logging
 import os
 import re
 import time
@@ -13,6 +14,7 @@ from flask import Flask, abort, jsonify, redirect, render_template, request, sen
 import io
 from urllib.parse import urlencode
 
+import car
 import charts
 import ember
 import energy
@@ -24,6 +26,8 @@ from auth import init_auth
 import live_chart
 from devices import format_duration, summarise
 from myenergi_client import MyEnergiClient, MyEnergiError
+
+log = logging.getLogger(__name__)
 
 ID_RE = re.compile(r"^[0-9a-f]{32}$")
 UPLOAD_MAX_AGE_S = 7 * 24 * 3600
@@ -59,6 +63,20 @@ def _num(name, default, lo, hi, cast=float):
     return min(max(v, lo), hi)
 
 
+def parse_history_from(value):
+    """HISTORY_FROM: a date (YYYY-MM-DD) or a number of days back; default 365 days. Returns a date or an int."""
+    value = (value or "").strip()
+    if not value:
+        return 365
+    if value.isdigit():
+        return int(value)
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        log.warning("HISTORY_FROM %r isn't a date (YYYY-MM-DD) or a number of days: using 365 days", value)
+        return 365
+
+
 def create_app(test_config=None):
     load_dotenv()
     app = Flask(__name__, instance_relative_config=True)
@@ -73,7 +91,8 @@ def create_app(test_config=None):
         DB_PATH=os.path.join(app.instance_path, "readings.db"),
         RECORD=os.environ.get("RECORD", "1").lower() not in ("0", "false", "no"),
         POLL_SECONDS=int(os.environ.get("POLL_SECONDS", "15")),
-        RETENTION_DAYS=int(os.environ.get("RETENTION_DAYS", "180")),
+        RETENTION_DAYS=int(os.environ.get("RETENTION_DAYS", "180")),   # raw readings; everything else is kept
+        HISTORY_FROM=parse_history_from(os.environ.get("HISTORY_FROM")),  # backfill the hub's history to here
         TIMEZONE=os.environ.get("TZ") or "Europe/London",    # day/week/month boundaries on the Energy page
         EMBER_EMAIL=os.environ.get("EMBER_EMAIL"),            # optional: EPH Ember heating (hot water tank probe)
         EMBER_PASSWORD=os.environ.get("EMBER_PASSWORD"),
@@ -131,6 +150,7 @@ def create_app(test_config=None):
         rec = app.extensions["recorder"] = recorder.Recorder(
             store, lambda: get_client().status(), app.config["POLL_SECONDS"], app.config["RETENTION_DAYS"],
             get_history=lambda kind, sno, day: get_client().day_history(kind, sno, day),
+            history_from=app.config["HISTORY_FROM"],
             get_ember=(lambda: get_ember().zones()) if get_ember() else None)
         rec.start()
 
@@ -266,6 +286,30 @@ def create_app(test_config=None):
                "is_now": s["in_progress"]}
         return render_template("energy.html", s=s, ch=energy.chart(s), nav=nav, day=day.isoformat(),
                                tz_name=app.config["TIMEZONE"], periods=energy.PERIODS, money=tariffs.money)
+
+    @app.get("/car")
+    def car_page():
+        """Car charging sessions per day, what each cost, and the rolling average cost per day."""
+        try:
+            tz = ZoneInfo(app.config["TIMEZONE"])
+        except (ZoneInfoNotFoundError, ValueError):
+            tz = ZoneInfo("UTC")
+        now_ts = app.config.get("NOW") or time.time()
+        today = datetime.fromtimestamp(now_ts, tz).date()
+        period = request.args.get("period", "month")
+        if period not in car.PERIODS:
+            period = "month"
+        try:
+            day = date.fromisoformat(request.args.get("date", ""))
+        except ValueError:
+            day = today
+        t = tariffs.load(store)
+        s = car.summarise(store, period, day, tz, now_ts, t)
+        nav = {"prev": car.shift(period, day, -1).isoformat(), "next": car.shift(period, day, 1).isoformat(),
+               "has_next": not s["in_progress"] and not s["future"]}
+        return render_template("car.html", s=s, ch=car.chart(s, t), nav=nav, day=day.isoformat(),
+                               periods=car.PERIODS, avg_days=car.AVG_DAYS, tz_name=app.config["TIMEZONE"],
+                               money=tariffs.money)
 
     @app.route("/settings/tariff", methods=["GET", "POST"])
     def tariff_settings():

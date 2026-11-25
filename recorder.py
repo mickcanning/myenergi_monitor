@@ -8,7 +8,7 @@ import math
 import sqlite3
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import flow
 from charts import Log, Row
@@ -378,13 +378,10 @@ class Store:
             c.executemany("INSERT OR REPLACE INTO energy_hh3 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
 
     def prune(self, before_ts):
+        """Delete raw readings (every device's full status, about 1.9 MB a day) older than before_ts. Everything
+        else (power flows, the hub's minute history, temperatures, signal metrics; about 0.3 MB a day) is
+        kept indefinitely for the Energy and Car history."""
         with self._conn() as c:
-            c.execute("DELETE FROM minutes WHERE ts < ?", (int(before_ts),))
-            c.execute("DELETE FROM energy_hh3 WHERE hh < ?", (int(before_ts),))
-            c.execute("DELETE FROM signal_hours WHERE hour < ?", (int(before_ts),))
-            c.execute("DELETE FROM temps WHERE ts < ?", (int(before_ts),))
-            c.execute("DELETE FROM history_days WHERE day < ?", (_utc(before_ts).strftime("%Y-%m-%d"),))
-            c.execute("DELETE FROM flows WHERE poll < ?", (int(before_ts),))
             return c.execute("DELETE FROM readings WHERE poll < ?", (int(before_ts),)).rowcount
 
 
@@ -396,13 +393,15 @@ class Recorder(threading.Thread):
 
     EMBER_EVERY_S = 300            # read Ember zone temperatures this often (it's a cloud service)
 
-    def __init__(self, store, get_status, interval=15, retention_days=180, get_history=None, get_ember=None):
+    def __init__(self, store, get_status, interval=15, retention_days=180, get_history=None, get_ember=None,
+                 history_from=365):
         super().__init__(name="recorder", daemon=True)
         self.store, self.get_status, self.get_history = store, get_status, get_history
         self.get_ember = get_ember
         self._last_ember = 0.0
         self._last_history = 0.0
         self.interval, self.retention_s = max(5, interval), retention_days * 86400
+        self.history_from = history_from       # backfill the hub's history to this date, or this many days back
         self.stop_event = threading.Event()
         self.last_ok = None          # unix time of the last successful poll
         self.last_error = None       # (unix time, message) of the most recent failure
@@ -454,8 +453,9 @@ class Recorder(threading.Thread):
                 log.warning("recorder: prune failed: %s", e)
 
     def sync_history(self, status, now=None):
-        """Fetch the hub's measured per-minute history for every UTC day since recording began that isn't
-        complete yet (today is refetched each sync). Returns the days fetched."""
+        """Fetch the hub's measured per-minute history for every UTC day back to `history_from` that isn't
+        complete yet, newest first (today is refetched each sync). Days before recording began are backfilled
+        too, a few per sync: the car charging page uses them. Returns the days fetched."""
         if not self.get_history:
             return []
         now = now or time.time()
@@ -469,7 +469,9 @@ class Recorder(threading.Thread):
         hub = next((d for d in devices if d[2]), devices[0])
         known = self.store.history_days()
         days, d = [], _utc(now).date()
-        while d >= _utc(max(first, now - self.retention_s)).date():
+        oldest = self.history_from if isinstance(self.history_from, date) else \
+            _utc(now - int(self.history_from) * 86400).date()
+        while d >= oldest:
             name = d.isoformat()
             if not known.get(name, (0, False))[1]:
                 days.append(name)

@@ -144,7 +144,7 @@ button.secondary { background:var(--card); color:var(--ink); border:1px solid va
 .dot.fresh { background:var(--good); } .dot.delayed { background:var(--warn-line); } .dot.silent { background:var(--bad-line); }
 @media (max-width: 560px) {
   header { flex-wrap:wrap; gap:.5rem 1rem; padding:.6rem 1rem; }
-  header nav { order:3; flex:1 1 100%; display:flex; gap:1.1rem; overflow-x:auto; scrollbar-width:none; }
+  header nav { order:3; flex:1 1 100%; min-width:0; display:flex; gap:1.1rem; overflow-x:auto; scrollbar-width:none; }
   header nav a { margin-right:0; white-space:nowrap; }
   header .settings { margin-left:auto; }
   main { padding:1rem 1rem 3rem; }
@@ -209,15 +209,16 @@ button.secondary { background:var(--card); color:var(--ink); border:1px solid va
 .table-scroll { overflow-x:auto; }
 .energy-table td.muted { font-size:inherit; }
 /* Grid import: where the imported energy went. Home = the grid part of the home's use (same orange). */
-.energy-chart, .import-card { --imp-home:#c2410c; --imp-batt:#6250d6; --imp-dev:#eda100; --imp-unattr:#b8b7b2; }
-:root[data-theme="dark"] .energy-chart, :root[data-theme="dark"] .import-card { --imp-home:#f29a55; --imp-batt:#9085e9; --imp-dev:#c98500; --imp-unattr:#6b6a65; }
+.energy-chart, .import-card { --imp-home:#c2410c; --imp-batt:#6250d6; --imp-eddi:#eda100; --imp-zappi:#e87ba4; --imp-unattr:#dcdbd6; }
+:root[data-theme="dark"] .energy-chart, :root[data-theme="dark"] .import-card { --imp-home:#f29a55; --imp-batt:#9085e9; --imp-eddi:#c98500; --imp-zappi:#e87ba4; --imp-unattr:#4a4945; }
 .eplot.imports { height:110px; margin-bottom:0 !important; }
 .eplot.bars { margin-bottom:1.1rem !important; }
 .eplot .ibar.home { fill:var(--imp-home); } .eplot .ibar.batt { fill:var(--imp-batt); }
-.eplot .ibar.dev { fill:var(--imp-dev); } .eplot .ibar.unattr { fill:var(--imp-unattr); }
+.eplot .ibar.eddi { fill:var(--imp-eddi); } .eplot .ibar.zappi { fill:var(--imp-zappi); } .eplot .ibar.unattr { fill:var(--imp-unattr); }
 .energy-chart .legend i.home, .import-legend i.home, .import-bar .home, .energy-chart .row-home i { background:var(--imp-home); }
 .energy-chart .legend i.batt, .import-legend i.batt, .import-bar .batt, .energy-chart .row-batt i { background:var(--imp-batt); }
-.energy-chart .legend i.dev, .import-legend i.dev, .import-bar .dev, .energy-chart .row-dev i { background:var(--imp-dev); }
+.energy-chart .legend i.eddi, .import-legend i.eddi, .import-bar .eddi, .energy-chart .row-eddi i { background:var(--imp-eddi); }
+.energy-chart .legend i.zappi, .import-legend i.zappi, .import-bar .zappi, .energy-chart .row-zappi i { background:var(--imp-zappi); }
 .energy-chart .legend i.unattr, .import-legend i.unattr, .import-bar .unattr, .energy-chart .row-unattr i { background:var(--imp-unattr); }
 .energy-chart .tip-gap { margin-top:.3rem; padding-top:.3rem; border-top:1px solid var(--line); }
 .import-card { border:1px solid var(--line); border-radius:8px; background:var(--card); padding:.7rem .9rem; margin:0 0 1rem; }
@@ -347,3 +348,22 @@ table.schedule { max-width:36rem; }
 .energy-chart .legend i.r4, .energy-chart .row-r4 i { background:var(--rate4); }
 .energy-chart .legend i.rx, .energy-chart .row-rx i { background:var(--ratex); }
 .energy-chart .legend b { color:var(--ink); }
+/* Car charging tab: daily cost bars by tariff band (rate colours above), the rolling average as a neutral line */
+.eplot.car { height:200px; margin-bottom:0 !important; }
+.eplot .cbar.kwh { fill:var(--use-zappi); }
+.eplot .avg-line { fill:none; stroke:var(--ink); stroke-width:2; stroke-linejoin:round; vector-effect:non-scaling-stroke; }
+.eplot .avg-end { position:absolute; width:9px; height:9px; margin:-4.5px 0 0 -4.5px; border-radius:50%; background:var(--ink); box-shadow:0 0 0 2px var(--card); }
+.energy-chart .legend i.avg-key, .energy-chart .tip i.avg-key { height:2px; width:14px; border-radius:1px; background:var(--ink); vertical-align:3px; }
+.car-sessions { margin-top:1rem; }
+.car-sessions h2 { font-size:1rem; margin:0 0 .5rem; }
+.car-sessions table { width:100%; border-collapse:collapse; font-size:.9em; }
+.car-sessions th, .car-sessions td { padding:.35rem .5rem; text-align:left; vertical-align:top; }
+.car-sessions thead th { color:var(--ink2); font-weight:500; border-bottom:1px solid var(--line); }
+.car-sessions tbody { border-bottom:1px solid var(--line); }
+.car-sessions th[scope=rowgroup] { font-weight:600; white-space:nowrap; }
+.car-sessions .num { text-align:right; }
+.car-sessions .time { white-space:nowrap; }
+.car-sessions .rates span { color:var(--ink2); white-space:nowrap; }
+.car-sessions .rates span + span::before { content:" · "; }
+.car-sessions .day-total td { border-top:1px dashed var(--line); }
+@media (max-width: 560px) { .eplot.car { height:160px; } .car-sessions .rates { display:none; } }

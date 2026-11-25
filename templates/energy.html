@@ -63,7 +63,8 @@
   {% endif %}
   {% if im.imp >= 0.005 %}
   {% set parts = [('home', 'Used by the home', im.home), ('batt', 'Charged the battery', im.batt),
-                  ('dev', 'Hot water & car', im.dev), ('unattr', 'Not attributed', im.unattr)] %}
+                  ('eddi', 'Heated the hot water', im.eddi), ('zappi', 'Charged the car', im.zappi),
+                  ('unattr', 'Not attributed', im.unattr)] %}
   <div class="import-bar" role="img" aria-label="{% for k, label, v in parts if v >= 0.005 %}{{ label }} {{ '%.1f' % v }} kWh{{ ', ' if not loop.last }}{% endfor %}">
     {% for k, label, v in parts if v / im.imp >= 0.003 %}<span class="{{ k }}" style="width:{{ v / im.imp * 100 }}%"></span>{% endfor %}
   </div>
@@ -108,7 +109,7 @@
     <div class="band" hidden></div>
   </div>
   <div class="panel-title">Grid import per {{ s.bucket_word }} <span class="muted">kWh</span>
-    <span class="legend"><span><i class="home"></i>Home</span><span><i class="batt"></i>Battery</span>{% if s.imports.dev >= 0.005 %}<span><i class="dev"></i>Hot water &amp; car</span>{% endif %}{% if s.imports.unattr >= 0.005 %}<span><i class="unattr"></i>Not attributed</span>{% endif %}</span>
+    <span class="legend"><span><i class="home"></i>Home</span><span><i class="batt"></i>Battery</span>{% if s.imports.eddi >= 0.005 %}<span><i class="eddi"></i>Hot water</span>{% endif %}{% if s.imports.zappi >= 0.005 %}<span><i class="zappi"></i>Car</span>{% endif %}{% if s.imports.unattr >= 0.005 %}<span><i class="unattr"></i>Not attributed</span>{% endif %}</span>
   </div>
   <div class="eplot imports">
     {% for t in ch.imp_ticks %}<span class="ytick" style="top:{{ t.y }}%">{{ t.text }}</span>{% endfor %}
@@ -222,8 +223,9 @@
         (d.i && d.i[0] >= 0.005 ? `<div class="tip-gap">Imported <b>${fmt(d.i[0])}</b></div>` +
           `<div class="row-home"><i></i>to home <b>${fmt(d.i[2])}</b></div>` +
           `<div class="row-batt"><i></i>to battery <b>${fmt(d.i[3])}</b></div>` +
-          (d.i[4] >= 0.005 ? `<div class="row-dev"><i></i>to hot water &amp; car <b>${fmt(d.i[4])}</b></div>` : "") +
-          (d.i[5] >= 0.005 ? `<div class="row-unattr"><i></i>not attributed <b>${fmt(d.i[5])}</b></div>` : "") : "") +
+          (d.i[4] >= 0.005 ? `<div class="row-eddi"><i></i>to hot water <b>${fmt(d.i[4])}</b></div>` : "") +
+          (d.i[5] >= 0.005 ? `<div class="row-zappi"><i></i>to the car <b>${fmt(d.i[5])}</b></div>` : "") +
+          (d.i[6] >= 0.005 ? `<div class="row-unattr"><i></i>not attributed <b>${fmt(d.i[6])}</b></div>` : "") : "") +
         (d.i && d.i[1] >= 0.005 ? `<div class="muted">Exported ${fmt(d.i[1])}</div>` : "") +
         (d["$"] != null ? `<div class="tip-gap">Import cost <b>${money(d["$"])}</b></div>` +
           (d["$r"] || []).sort((a, b) => Object.keys(rateCls).indexOf(a[0]) - Object.keys(rateCls).indexOf(b[0]))

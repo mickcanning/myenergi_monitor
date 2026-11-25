@@ -99,21 +99,29 @@ def summarise(store, period, day, tz, now_ts):
     n = len(bks)
     arrs = [[0.0] * n for _ in estimate.FIELDS]
     kwh, from_grid, var, covered, measured, sampled, imp, exp_, g_batt, g_dev, eddi, zappi, charge = arrs
+    g_eddi, g_zappi = [0.0] * n, [0.0] * n            # grid import to the hot water and the car
     for hh, vals in halves.items():
         i = bisect_right(starts, hh) - 1
         if 0 <= i < n:
             for arr, v in zip(arrs, vals):
                 arr[i] += v or 0
+            # the half hour's grid import to the devices, split in proportion to what each used
+            gd, ed, zp = (vals[estimate.FIELDS.index(f)] or 0 for f in ("grid_dev", "eddi", "zappi"))
+            if gd > 0 and ed + zp > 0:
+                g_eddi[i] += gd * ed / (ed + zp)
+                g_zappi[i] += gd * zp / (ed + zp)
+            elif gd > 0:
+                g_eddi[i] += gd
     use_cum = {k: 0.0 for k in USES}
     rows, total, total_grid, total_var, total_sampled = [], 0.0, 0.0, 0.0, 0.0
-    imp_t = {"imp": 0.0, "exp": 0.0, "home": 0.0, "batt": 0.0, "dev": 0.0}
+    imp_t = {"imp": 0.0, "exp": 0.0, "home": 0.0, "batt": 0.0, "eddi": 0.0, "zappi": 0.0}
     for k, (a, b, short, long) in enumerate(bks):
         e, g = kwh[k], min(max(from_grid[k], 0.0), max(kwh[k], 0.0))
         future = a >= now_ts
         span = max(1.0, min(b, now_ts) - a)                       # only the part of the bucket that has happened
         uses_k = {"home": e, "eddi": eddi[k], "charge": charge[k], "zappi": zappi[k], "export": exp_[k]}
         # where this slot's grid import went; anything we couldn't attribute (no solar & battery reading)
-        dest = {"home": g, "batt": g_batt[k], "dev": g_dev[k]}
+        dest = {"home": g, "batt": g_batt[k], "eddi": g_eddi[k], "zappi": g_zappi[k]}
         unattr = max(imp[k] - sum(dest.values()), 0.0)
         if not future:
             total += e
@@ -135,7 +143,8 @@ def summarise(store, period, day, tz, now_ts):
                      "uses_cum": None if future else dict(use_cum),
                      "imp": None if future else imp[k], "exp": None if future else exp_[k],
                      "imp_home": None if future else g, "imp_batt": None if future else g_batt[k],
-                     "imp_dev": None if future else g_dev[k], "imp_unattr": None if future else unattr,
+                     "imp_eddi": None if future else g_eddi[k], "imp_zappi": None if future else g_zappi[k],
+                     "imp_unattr": None if future else unattr,
                      "current": a <= now_ts < b})
     # hot water tank temperature (optional, from the heating system), and its range in each slot
     tank = [t for t in store.tank_temps(lo, min(hi, now_ts + 1)) if t[1] is not None]
@@ -163,7 +172,8 @@ def summarise(store, period, day, tz, now_ts):
             "busiest": busiest, "in_progress": lo <= now_ts < hi, "future": lo > now_ts,
             "tank": tank, "rooms": rooms, "lo": lo, "hi": hi,
             "uses": use_cum, "uses_total": sum(use_cum.values()),
-            "imports": {**imp_t, "unattr": max(imp_t["imp"] - imp_t["home"] - imp_t["batt"] - imp_t["dev"], 0.0)},
+            "imports": {**imp_t, "unattr": max(imp_t["imp"] - imp_t["home"] - imp_t["batt"] - imp_t["eddi"]
+                                               - imp_t["zappi"], 0.0)},
             "bucket_word": BUCKET_WORD[period]}
 
 
@@ -276,7 +286,8 @@ def chart(s):
             continue
         x, w = round(i * col + pad / 2, 2), round(col - pad, 2)
         parts, base = [], 0.0
-        for cls, key in (("home", "imp_home"), ("batt", "imp_batt"), ("dev", "imp_dev"), ("unattr", "imp_unattr")):
+        for cls, key in (("home", "imp_home"), ("batt", "imp_batt"), ("eddi", "imp_eddi"), ("zappi", "imp_zappi"),
+                         ("unattr", "imp_unattr")):
             v = r[key] or 0
             y_lo, y_hi = y(base, imp_max), y(base + v, imp_max)
             base += v
@@ -340,7 +351,7 @@ def chart(s):
             "shown": [{"key": k, "label": USE_LABELS[k]} for k in shown],
             "hover": [{"l": r["long"], "k": None if r["kwh"] is None else round(r["kwh"], 3),
                        "i": None if r["imp"] is None else [round(r[k] or 0, 3) for k in
-                                                           ("imp", "exp", "imp_home", "imp_batt", "imp_dev", "imp_unattr")],
+                                                           ("imp", "exp", "imp_home", "imp_batt", "imp_eddi", "imp_zappi", "imp_unattr")],
                        "e": None if r["err"] is None else round(r["err"], 3),
                        "t": r.get("tank"), "rm": r.get("rooms"),
                        "$": None if r.get("cost") is None else round(r["cost"], 4),

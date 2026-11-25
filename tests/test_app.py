@@ -357,8 +357,10 @@ def test_recorder_and_store(tmp_path):
     rec.get_status = boom
     rec.poll_once(now=hi + 15)
     assert rec.last_error[1] == "API down" and store.span()[1] == hi
-    # old rows are pruned past the retention period
+    # old raw readings are pruned past the retention period; the power flows are kept for the energy history
+    flows_before = store._conn().execute("SELECT COUNT(*) FROM flows").fetchone()[0]
     assert store.prune(t0 + 3600) > 0 and store.span()[0] == t0 + 3600
+    assert store._conn().execute("SELECT COUNT(*) FROM flows").fetchone()[0] == flows_before > 0
 
 
 def make_recorded_app(tmp_path, hours=26, step=30):
@@ -611,6 +613,7 @@ def test_energy_page(tmp_path):
     # this data imports 4 kW against 4 kW of demand (home, hot water, battery charging): all from the grid
     assert "From solar &amp; battery" in html and 'class="bar grid' in html and 'class="bar solar' not in html
     assert "Imported from the grid" in html and 'class="eplot imports"' in html and 'class="ibar home"' in html
+    assert "Hot water &amp; car" not in html and "Hot water & car" not in html          # split into the two devices
     assert 'class="on" aria-current="true">Day' in html and 'class="eplot cum"' in html
     assert 'href="/energy" class="on">Energy</a>' in html and 'class="on">Overview' not in html   # its own tab
     for p in ("week", "month", "year"):
@@ -681,15 +684,38 @@ def test_history_sync(tmp_path):
     status = {"eddi": [{"sno": 1, "isVHubEnabled": True}], "zappi": [{"sno": 2}], "harvi": [{"sno": 3}]}
     rec = recorder.Recorder(st, lambda: status, get_history=history)
     days = rec.sync_history(status, now)
-    assert days == [_day(now), _day(now - 86400), _day(now - 2 * 86400)]           # newest first
+    # newest first, a few days per sync, reaching back before recording began (the car page uses those days)
+    assert days == [_day(now - i * 86400) for i in range(rec.HISTORY_DAYS_PER_SYNC)]
     assert {k for k, _ in calls} == {"eddi", "zappi"}
     hist = st.history_days()
     assert not hist[_day(now)][1] and hist[_day(now - 86400)][1]                     # today isn't complete
     m = st.minutes(now - 86400, now - 86400 + 60)
     assert list(m.values()) == [(600, 60, 360, 120, 240)]   # hub's import/export; Eddi + Zappi, then each
-    assert st._conn().execute("SELECT COUNT(*) FROM minutes").fetchone()[0] == 3 * 1440   # the 1441st minute is dropped
+    assert st._conn().execute("SELECT COUNT(*) FROM minutes").fetchone()[0] == 10 * 1440   # the 1441st minute is dropped
     calls.clear()
-    assert rec.sync_history(status, now + 600) == [_day(now)] and len(calls) == 2   # only today again
+    # then today again, and the backfill carries on further back
+    assert rec.sync_history(status, now + 600) == [_day(now)] + [_day(now - i * 86400) for i in range(10, 19)]
+    for k in range(40):
+        rec.sync_history(status, now + 600 * (k + 2))
+    calls.clear()
+    assert rec.sync_history(status, now + 600 * 50) == [_day(now)] and len(calls) == 2   # all done: only today
+    oldest = st._conn().execute("SELECT MIN(ts) FROM minutes").fetchone()[0]
+    assert _day(oldest) == _day(now - 365 * 86400)                                  # default: a year back
+    # HISTORY_FROM as a date (e.g. when the car charger was installed) stops the backfill there
+    from datetime import date
+    rec2 = recorder.Recorder(recorder.Store(tmp_path / "h2.db"), lambda: status, get_history=history,
+                             history_from=date.fromisoformat(_day(now - 15 * 86400)))
+    rec2.store._conn().execute("INSERT INTO flows (poll, grid, solar, eddi, zappi, home) VALUES (?, 0, 0, 0, 0, 0)", (now,))
+    rec2.store._conn().commit()
+    got = rec2.sync_history(status, now) + rec2.sync_history(status, now + 600)
+    assert got[-1] == _day(now - 15 * 86400) and rec2.sync_history(status, now + 1200) == [_day(now)]
+    import app as app_module
+    assert app_module.parse_history_from("2026-03-24") == date(2026, 3, 24)
+    assert app_module.parse_history_from("730") == 730 and app_module.parse_history_from("") == 365
+    assert app_module.parse_history_from("soon") == 365
+    # the Energy tab still starts on the first recorded day: its home figures need our solar samples
+    import estimate
+    assert estimate.half_hours(st, now - 5 * 86400, now - 4 * 86400, now) == {}
 
 
 def test_estimate_overnight_battery_charging(tmp_path):
@@ -977,6 +1003,107 @@ def test_tariff_costs_and_pages(tmp_path):
     assert re.findall(r'<i class="(r\d)"></i>(\w+)', html)[:3] == [("r0", "Day"), ("r1", "Night"), ("r2", "Nightboost")]
 
 
+def test_device_import_split_between_hot_water_and_car(tmp_path):
+    """Grid import to the devices is split per half hour in proportion to each one's use."""
+    from zoneinfo import ZoneInfo
+    import energy, estimate
+    a = make_app(tmp_path)
+    st = a.extensions["store"]
+    tz = ZoneInfo("Europe/London")
+    d0 = 1795000000 // 86400 * 86400
+    f = estimate.FIELDS
+
+    def hh(**kw):
+        return tuple(kw.get(k, 0.0) for k in f)
+    halves = {d0 + 1800 * 2: hh(imp=3.0, grid_dev=3.0, eddi=1.0, zappi=2.0, covered=1800, measured=1800),
+              d0 + 1800 * 3: hh(imp=1.0, grid_dev=1.0, eddi=1.0, covered=1800, measured=1800)}
+    orig = estimate.half_hours
+    estimate.half_hours = lambda *args, **kw: halves
+    try:
+        from datetime import datetime, timezone
+        s = energy.summarise(st, "week", datetime.fromtimestamp(d0, timezone.utc).date(), tz, d0 + 86400)
+    finally:
+        estimate.half_hours = orig
+    assert abs(s["imports"]["eddi"] - 2.0) < 1e-9 and abs(s["imports"]["zappi"] - 2.0) < 1e-9
+    assert abs(s["imports"]["unattr"]) < 1e-9
+
+
+def test_car_charging_sessions_and_costs(tmp_path):
+    """Sessions from the Zappi's measured minutes: pauses stay in one session, solar's share is free, each
+    minute is priced at its rate, a session past midnight belongs to the day it started; plus the page."""
+    from datetime import date, datetime as dt
+    from zoneinfo import ZoneInfo
+    import car, recorder, tariff
+    tz = ZoneInfo("Europe/London")
+    a = make_app(tmp_path)
+    st = a.extensions["store"]
+    tariff.save(st, {"currency": "£", "rates": [
+        {"name": "Day", "start": "08:00", "end": "23:00", "price": 0.30},
+        {"name": "Night", "start": "23:00", "end": "08:00", "price": 0.10},
+        {"name": "Nightboost", "start": "02:00", "end": "04:00", "price": 0.05}]})
+    d1 = int(dt(2026, 12, 1, tzinfo=tz).timestamp())          # GMT, so local = UTC
+    car_w = {}
+    for m in range(d1 + 2 * 3600, d1 + 3 * 3600, 60):        # 02:00-03:00 at 7 kW, paused 02:20-02:40
+        if not (d1 + 2 * 3600 + 1200 <= m < d1 + 2 * 3600 + 2400):
+            car_w[m] = 7000
+    for m in range(d1 + 13 * 3600, d1 + 13 * 3600 + 1800, 60):    # 13:00-13:30 at 2 kW with solar
+        car_w[m] = 2000
+    for m in range(d1 + 2 * 86400 + 23 * 3600 + 1800, d1 + 3 * 86400 + 1800, 60):   # 3 Dec 23:30 - 00:30
+        car_w[m] = 6000
+    for day in range(4):
+        rows = []
+        for m in range(d1 + day * 86400, d1 + (day + 1) * 86400, 60):
+            w = car_w.get(m, 0)
+            imp = 1000 if 13 * 3600 <= m - d1 - day * 86400 < 13 * 3600 + 1800 and w else w + 200
+            rows.append((m, imp * 60, 0, w * 60, 0, w * 60))
+        st.save_minutes(f"2026-12-0{day + 1}", rows, complete=True)
+    with st._conn() as c:                                      # 1.5 kW of solar during the midday session
+        c.executemany("INSERT INTO flows (poll, grid, solar, eddi, zappi, home) VALUES (?, ?, ?, ?, ?, ?)",
+                      [(t, 1000, 1500, 0, 2000, 500) for t in range(d1 + 13 * 3600, d1 + 13 * 3600 + 1800, 15)])
+    now = d1 + 3 * 86400 + 12 * 3600                           # midday on 4 Dec
+    ss = car.sessions(st, d1, now, tariff.load(st), tz)
+    assert [x["local_start"].strftime("%d %H:%M") for x in ss] == ["01 02:00", "01 13:00", "03 23:30"]
+    night, solar, late = ss
+    assert abs(night["kwh"] - 7 * 40 / 60) < 1e-6 and abs(night["cost"] - 7 * 40 / 60 * 0.05) < 1e-6
+    assert night["by_rate"].keys() == {"Nightboost"}
+    assert abs(solar["kwh"] - 1.0) < 1e-6 and abs(solar["grid"] - 0.4) < 1e-6      # 1 kW / (1 + 1.5) kW
+    assert abs(solar["cost"] - 0.4 * 0.30) < 1e-6 and abs(solar["solar"] - 0.6) < 1e-6
+    assert abs(late["kwh"] - 6.0) < 1e-6 and abs(late["cost"] - 0.60) < 1e-6        # all Night, both days
+    s = car.summarise(st, "month", date(2026, 12, 4), tz, now, tariff.load(st))
+    days = {x["date"].day: x for x in s["days"]}
+    assert len(days[1]["sessions"]) == 2 and not days[2]["sessions"] and len(days[3]["sessions"]) == 1
+    total = 7 * 40 / 60 * 0.05 + 0.12 + 0.60
+    assert abs(s["total_cost"] - total) < 1e-6 and s["sessions"] == 3 and s["charge_days"] == 2
+    assert abs(days[4]["avg"] - total / 4) < 1e-6 and days[4]["avg_n"] == 4        # 4 days recorded so far
+    assert abs(days[1]["avg"] - (7 * 40 / 60 * 0.05 + 0.12)) < 1e-6
+    ch = car.chart(s, tariff.load(st))
+    assert [r["name"] for r in ch["rates"]] == ["Day", "Night", "Nightboost"] and ch["line"]
+
+    # a backfilled day (the hub's history, no solar & battery samples): the car is costed for at most the import
+    st2 = recorder.Store(tmp_path / "backfill.db")
+    b0 = int(dt(2026, 6, 10, 12, tzinfo=tz).timestamp())      # BST: 12:00 local is in "Day"
+    st2.save_minutes("2026-06-10", [(m, 2000 * 60, 0, 7000 * 60, 0, 7000 * 60) for m in range(b0, b0 + 3600, 60)]
+                     + [(m, 0, 3000 * 60, 4000 * 60, 0, 4000 * 60) for m in range(b0 + 3600, b0 + 7200, 60)],
+                     complete=True)
+    (bs,) = car.sessions(st2, b0 - 3600, b0 + 86400, tariff.load(st), tz)
+    assert abs(bs["kwh"] - 11.0) < 1e-6 and abs(bs["grid"] - 2.0) < 1e-6           # 2 kW import, then pure solar
+    assert abs(bs["cost"] - 2.0 * 0.30) < 1e-6
+
+    a.config["NOW"] = now
+    html = a.test_client().get("/car").get_data(as_text=True)
+    assert "Car charging" in html and "December 2026" in html and "Day total" in html
+    assert "13:00–13:30" in html and "23:30–00:30" in html and "next day" in html
+    assert 'class="cbar r2"' in html and 'class="avg-line"' in html and money_in(html, total)
+    assert 'href="/car" class="on">Car</a>' in html
+    assert a.test_client().get("/car?period=year&date=bogus").status_code == 200
+    st.set_setting("tariff", "")
+    assert "Set your tariff" in a.test_client().get("/car").get_data(as_text=True)
+
+
+def money_in(html, v):
+    return f"£{v:.2f}" in html
+
+
 if __name__ == "__main__":
     import tempfile
     for fn in (test_dashboard_and_api, test_upload_and_report, test_current_report_persists,
@@ -988,7 +1115,8 @@ if __name__ == "__main__":
                test_history_sync, test_estimate_overnight_battery_charging, test_minutes_table_upgrade,
                test_quiet_solar_harvi_counts_as_zero, test_harvi_signal_metrics, test_signal_page_and_change_log,
                test_tank_temp_only_shown_once_it_changes, test_ember_tank_temperature,
-               test_quick_ranges_merge_into_all_data, test_tariff_costs_and_pages):
+               test_quick_ranges_merge_into_all_data, test_tariff_costs_and_pages,
+               test_device_import_split_between_hot_water_and_car, test_car_charging_sessions_and_costs):
         with tempfile.TemporaryDirectory() as d:
             fn(Path(d))
             print("ok", fn.__name__)

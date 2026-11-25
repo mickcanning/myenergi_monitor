@@ -35,7 +35,8 @@
     {% endif %}
 
     {% for n in flow.nodes %}
-    {% if n.key == 'home' %}<a href="{{ url_for('energy_page') }}" class="node-link" aria-label="Home energy use"><title>Show home energy use</title>{% endif %}
+    {% if n.key == 'home' %}<a href="{{ url_for('energy_page') }}" class="node-link" aria-label="Home energy use"><title>Show home energy use</title>
+    {% elif n.key == 'zappi' %}<a href="{{ url_for('car_page') }}" class="node-link" aria-label="Car charging"><title>Show car charging</title>{% endif %}
     <g class="node {{ n.cls }}">
       <circle cx="{{ n.x }}" cy="{{ n.y }}" r="{{ flow.node_r }}"/>
       <g class="icon" transform="translate({{ n.x - 18 }} {{ n.y - 18 }}) scale(1.5)">{{ n.icon | safe }}</g>
@@ -49,7 +50,7 @@
       {% for line in n.caption %}<text class="node-cap" x="{{ n.x }}" y="{{ n.y + 89 + loop.index0 * 13 }}" text-anchor="middle">{{ line }}</text>{% endfor %}
       {% endif %}
     </g>
-    {% if n.key == 'home' %}</a>{% endif %}
+    {% if n.key in ('home', 'zappi') %}</a>{% endif %}
     {% endfor %}
   </svg>
   <figcaption class="muted">

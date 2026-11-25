@@ -117,6 +117,9 @@ def costs(store, tariff, buckets, now_ts, tz):
     names = [r["name"] for r in tariff["rates"]]
     lo, hi = buckets[0][0], min(buckets[-1][1], now_ts)
     out = [{"cost": 0.0, "kwh": 0.0, "by_rate": {}} for _ in buckets]
+    first = store.first_flow_poll()        # like the Energy tab's figures, from the first recorded day
+    if first is not None:
+        lo = max(lo, first // 86400 * 86400)
     if hi <= lo:
         return out
     starts = [b[0] for b in buckets]
