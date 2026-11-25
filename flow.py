@@ -33,6 +33,9 @@ ICONS = {
     "solar": '<circle cx="9" cy="9" r="3.6"/><path d="M9 1.8v1.8M9 14.4v1.8M1.8 9h1.8M14.4 9h1.8M3.9 3.9l1.3 1.3'
              'M12.8 12.8l1.3 1.3M3.9 14.1l1.3-1.3M12.8 5.2l1.3-1.3"/><rect x="12.5" y="15" width="9" height="6.5" rx="1.3"/>'
              '<path d="M21.5 17.3h.9v2h-.9M17.4 16.4l-1.4 2h2l-1.4 2"/>',
+    "sun": '<circle cx="12" cy="12" r="4.5"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6'
+           'M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/>',
+    "battery": '<rect x="3" y="7" width="16" height="10" rx="2"/><path d="M19 10.5h2v3h-2M8 12h6M11 9v6"/>',
     "grid": '<path d="M12 2 7.5 22M12 2l4.5 20M7 7h10M5 11h14M8.5 11 15 17M15.5 11 9 17M7 17h10"/>',
     "home": '<path d="M3 11.5 12 4l9 7.5M5.5 9.5V20h13V9.5"/><path d="M10 20v-5.5h4V20"/>',
     "eddi": '<rect x="6" y="2.5" width="12" height="19" rx="3"/>'
@@ -171,9 +174,11 @@ def _zappi_caption(rec):
 
 # Layout in a 380 x 430 viewBox: sources across the top, the hub in the middle, loads across the bottom.
 CENTRE, HUB_R, NODE_R = (190, 205), 42, 32
+SOC_R = 37             # the battery's state-of-charge gauge, just outside its node
+GAUGE_START, GAUGE_SWEEP = 135, 270     # degrees, clockwise from east: 0% at bottom-left, 100% at bottom-right
 
 
-def _link(pos, w, outward, cls):
+def _link(pos, w, outward, cls, edge=NODE_R + 4):
     """A line between the hub edge and a node edge, with an arrowhead pointing the way power flows.
     `outward` = power flows from the hub to the node when w is positive."""
     cx, cy = CENTRE
@@ -181,7 +186,7 @@ def _link(pos, w, outward, cls):
     d = math.hypot(x - cx, y - cy)
     ux, uy = (x - cx) / d, (y - cy) / d
     a = (cx + ux * (HUB_R + 4), cy + uy * (HUB_R + 4))
-    b = (x - ux * (NODE_R + 4), y - uy * (NODE_R + 4))
+    b = (x - ux * edge, y - uy * edge)
     active = w is not None and abs(w) >= IDLE_W
     to_node = (w or 0) > 0 if outward else (w or 0) < 0
     mx, my = (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
@@ -201,18 +206,52 @@ def _link(pos, w, outward, cls):
             "active": active, "cls": cls if active else "idle"}
 
 
-def build(status, show_tank_temp=False, tank=None, rooms=None):
-    """Everything the Overview template draws."""
+def split_solar(combined, battery):
+    """Split the Harvi's live solar & battery reading using FusionSolar ({soc, solar W, age s}).
+
+    Solar changes slowly, so it is FusionSolar's latest 5-minute reading (up to ~10 minutes old). The battery is
+    what reacts to the house second by second, so it gets the rest of the live reading: Solar + Battery always
+    equals what the Harvi measures. Returns (solar W, battery W: + discharging into the house, - charging)."""
+    solar = battery.get("solar")
+    solar = 0.0 if solar is None or solar < IDLE_W else solar      # night: a few W of noise on the strings
+    return solar, combined - solar
+
+
+def soc_gauge(pos, soc):
+    """A speedometer-style state-of-charge gauge around a node: a 270° arc from bottom-left (0%) clockwise over
+    the top to bottom-right (100%), open at the bottom where the node's link leaves, filled up to `soc`. Returns
+    the dash patterns for the track and the filled arc (a circle rotated to start at 0%) and the rotation."""
+    x, y = pos
+    circ = 2 * math.pi * SOC_R
+    sweep = circ * GAUGE_SWEEP / 360
+    return {"track": f"{sweep:.1f} {circ:.1f}", "fill": f"{sweep * soc / 100:.1f} {circ:.1f}",
+            "rotate": f"{GAUGE_START} {x} {y}"}
+
+
+def build(status, show_tank_temp=False, tank=None, rooms=None, battery=None):
+    """Everything the Overview template draws. `battery` ({soc, solar W, age s} from FusionSolar) splits the
+    solar & battery node into Solar and Battery; without it there's one combined node."""
     v = compute(status)
     nodes = []
 
-    def add(key, pos, label, w, caption, outward, cls, top):
-        link = _link(pos, w, outward, cls)
+    def add(key, pos, label, w, caption, outward, cls, top, **extra):
+        link = _link(pos, w, outward, cls, extra.pop("edge", NODE_R + 4))
         nodes.append({"key": key, "x": pos[0], "y": pos[1], "label": label, "value": fmt_power(w),
-                      "caption": caption, "icon": ICONS[key], "link": link, "active": link["active"],
-                      "cls": link["cls"], "top": top})
+                      "caption": caption, "icon": ICONS[extra.pop("icon", key)], "link": link, "active": link["active"],
+                      "cls": link["cls"], "top": top, "show_caption": True, **extra})
 
-    if v["solar"] is not None:
+    split = v["solar"] is not None and battery is not None and battery.get("soc") is not None
+    if split:
+        s, b = split_solar(v["solar"], battery)
+        mins = max(1, round((battery.get("age") or 0) / 60))
+        add("solar", (62, 80), "Solar", s, ["Generating" if s >= IDLE_W else "Idle", f"{mins} min ago"], False,
+            "src-solar", True, icon="sun")
+        soc = max(0.0, min(100.0, battery["soc"]))
+        state = "Charging" if b <= -IDLE_W else "Discharging" if b >= IDLE_W else "Idle"
+        # charging draws power from the hub like a load; discharging supplies it like a source
+        add("battery", (190, 80), f"Battery {soc:.0f}%", b, [state], False, "src-solar" if b > 0 else "load",
+            True, show_caption=False, soc=soc, edge=SOC_R + 5, gauge=soc_gauge((190, 80), soc))
+    elif v["solar"] is not None:
         s = v["solar"]
         if v["solar_stale"]:
             cap = "Idle (Harvi quiet)"
@@ -227,7 +266,7 @@ def build(status, show_tank_temp=False, tank=None, rooms=None):
     if v["grid"] is not None:
         g = v["grid"]
         cap = "Importing" if g >= IDLE_W else "Exporting" if g <= -IDLE_W else "Idle"
-        add("grid", (295, 80), "Grid", g, [cap], False, "src-grid" if g > 0 else "src-solar", True)
+        add("grid", (318 if split else 295, 80), "Grid", g, [cap], False, "src-grid" if g > 0 else "src-solar", True)
 
     bottom = [k for k in ("home", "eddi", "zappi") if v[k] is not None]
     xs = {1: [190], 2: [115, 265], 3: [62, 190, 318]}.get(len(bottom), [])
@@ -242,5 +281,5 @@ def build(status, show_tank_temp=False, tank=None, rooms=None):
         else:
             add(k, (x, y), "Car", w, _zappi_caption(v["zappi_rec"]), True, "load", False)
 
-    return {"nodes": nodes, "self_pct": v["self_pct"], "centre": CENTRE, "hub_r": HUB_R, "node_r": NODE_R,
-            "values": v}
+    return {"nodes": nodes, "self_pct": v["self_pct"], "centre": CENTRE, "hub_r": HUB_R, "node_r": NODE_R, "soc_r": SOC_R,
+            "values": v, "split": split}

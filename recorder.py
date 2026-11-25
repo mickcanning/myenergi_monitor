@@ -63,6 +63,11 @@ CREATE TABLE IF NOT EXISTS temps (
 );
 -- Distinct tank temperatures each Eddi has reported: shown only once it has reported more than one, since
 -- without a probe some report a fixed value.
+-- Huawei FusionSolar 5-minute readings (optional, see fusionsolar.py): battery state of charge %, battery W
+-- (+ charging, - discharging) and solar W (the PV strings' DC power).
+CREATE TABLE IF NOT EXISTS huawei (ts INTEGER PRIMARY KEY, soc REAL, battery REAL, solar REAL);
+-- Which local days of FusionSolar history have been fetched; complete = the day was over when it was fetched.
+CREATE TABLE IF NOT EXISTS huawei_days (day TEXT PRIMARY KEY, fetched INTEGER, complete INTEGER);
 CREATE TABLE IF NOT EXISTS tank_temps (sno TEXT, value REAL, PRIMARY KEY (sno, value));
 DROP TABLE IF EXISTS energy_hh;
 DROP TABLE IF EXISTS energy_hh2;
@@ -367,6 +372,27 @@ class Store:
     def first_flow_poll(self):
         return self._conn().execute("SELECT MIN(poll) FROM flows").fetchone()[0]
 
+    # -- Huawei FusionSolar ---------------------------------------------------
+    def save_huawei_day(self, day, rows, complete, now=None):
+        """rows: [(ts, soc %, battery W, solar W)] for one local day (an ISO date)."""
+        with self._conn() as c:
+            c.executemany("INSERT OR REPLACE INTO huawei VALUES (?, ?, ?, ?)", rows)
+            c.execute("INSERT OR REPLACE INTO huawei_days VALUES (?, ?, ?)",
+                      (day, int(now or time.time()), 1 if complete else 0))
+
+    def huawei_days(self):
+        return {d: bool(cp) for d, cp in self._conn().execute("SELECT day, complete FROM huawei_days")}
+
+    def huawei(self, start_ts, end_ts):
+        """[(ts, soc, battery W, solar W)] in [start, end), oldest first."""
+        return self._conn().execute("SELECT ts, soc, battery, solar FROM huawei WHERE ts >= ? AND ts < ? ORDER BY ts",
+                                    (int(start_ts), int(end_ts))).fetchall()
+
+    def latest_huawei(self):
+        """(ts, soc, battery W, solar W) of the newest reading with a state of charge, or None."""
+        return self._conn().execute(
+            "SELECT ts, soc, battery, solar FROM huawei WHERE soc IS NOT NULL ORDER BY ts DESC LIMIT 1").fetchone()
+
     # -- cached half-hour estimates ------------------------------------------
     def cached_hh(self, start_ts, end_ts):
         return {r[0]: r[1:] for r in self._conn().execute(
@@ -392,9 +418,11 @@ class Recorder(threading.Thread):
     HISTORY_DAYS_PER_SYNC = 10     # at most this many days per sync, so a long backfill is spread out
 
     EMBER_EVERY_S = 300            # read Ember zone temperatures this often (it's a cloud service)
+    HUAWEI_EVERY_S = 300           # FusionSolar has a reading every 5 minutes
+    HUAWEI_DAYS_PER_SYNC = 4       # days of FusionSolar history per sync besides today (2 requests a day)
 
     def __init__(self, store, get_status, interval=15, retention_days=180, get_history=None, get_ember=None,
-                 history_from=365):
+                 history_from=365, get_huawei_now=None, get_huawei_day=None, tz=timezone.utc):
         super().__init__(name="recorder", daemon=True)
         self.store, self.get_status, self.get_history = store, get_status, get_history
         self.get_ember = get_ember
@@ -402,6 +430,9 @@ class Recorder(threading.Thread):
         self._last_history = 0.0
         self.interval, self.retention_s = max(5, interval), retention_days * 86400
         self.history_from = history_from       # backfill the hub's history to this date, or this many days back
+        self.get_huawei_now, self.get_huawei_day, self.tz = get_huawei_now, get_huawei_day, tz
+        self.huawei_now = None       # (unix time, fusionsolar.parse_flow dict) from the last FusionSolar read
+        self._last_huawei = 0.0
         self.stop_event = threading.Event()
         self.last_ok = None          # unix time of the last successful poll
         self.last_error = None       # (unix time, message) of the most recent failure
@@ -425,6 +456,12 @@ class Recorder(threading.Thread):
                 except Exception as e:
                     log.warning("recorder: Ember read failed: %s", e)
             self.last_ok, self.latest = now, (now, status)
+            if (self.get_huawei_now or self.get_huawei_day) and now - self._last_huawei >= self.HUAWEI_EVERY_S:
+                self._last_huawei = now
+                try:
+                    self.sync_huawei(now)
+                except Exception as e:
+                    log.warning("recorder: FusionSolar read failed: %s", e)
             if self.get_history and now - self._last_history >= self.HISTORY_EVERY_S:
                 self._last_history = now
                 try:
@@ -469,8 +506,7 @@ class Recorder(threading.Thread):
         hub = next((d for d in devices if d[2]), devices[0])
         known = self.store.history_days()
         days, d = [], _utc(now).date()
-        oldest = self.history_from if isinstance(self.history_from, date) else \
-            _utc(now - int(self.history_from) * 86400).date()
+        oldest = self._oldest_day(now)
         while d >= oldest:
             name = d.isoformat()
             if not known.get(name, (0, False))[1]:
@@ -496,6 +532,38 @@ class Recorder(threading.Thread):
                     if m[0] is not None and day_start <= ts < day_start + 86400]
             self.store.save_minutes(day, rows, complete=now > day_start + 86400 + 1800, now=now)
             done.append(day)
+        return done
+
+    def _oldest_day(self, now):
+        return self.history_from if isinstance(self.history_from, date) else \
+            _utc(now - int(self.history_from) * 86400).date()
+
+    def sync_huawei(self, now=None):
+        """Read FusionSolar's current figures, then its 5-minute history for today and for up to
+        HUAWEI_DAYS_PER_SYNC earlier local days back to `history_from` that aren't complete yet, newest first.
+        Returns the days fetched."""
+        now = now or time.time()
+        if self.get_huawei_now:
+            cur = self.get_huawei_now()
+            if cur is not None:
+                self.huawei_now = (now, cur)
+        if not self.get_huawei_day:
+            return []
+        known = self.store.huawei_days()
+        today = datetime.fromtimestamp(now, self.tz).date()
+        days, d, oldest = [], today, self._oldest_day(now)
+        while d >= oldest and len(days) <= self.HUAWEI_DAYS_PER_SYNC:
+            if not known.get(d.isoformat(), False):
+                days.append(d)
+            d -= timedelta(days=1)
+        done = []
+        for d in days:
+            rows = self.get_huawei_day(d)
+            if rows is None:                         # FusionSolar unreachable: try again next sync
+                break
+            end = datetime.combine(d + timedelta(days=1), datetime.min.time(), self.tz).timestamp()
+            self.store.save_huawei_day(d.isoformat(), rows, complete=now > end + 1800, now=now)
+            done.append(d.isoformat())
         return done
 
     def run(self):

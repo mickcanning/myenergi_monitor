@@ -21,6 +21,7 @@ import energy
 import harvi_signal
 import tariff as tariffs
 import flow
+import fusionsolar
 import recorder
 from auth import init_auth
 import live_chart
@@ -96,6 +97,9 @@ def create_app(test_config=None):
         TIMEZONE=os.environ.get("TZ") or "Europe/London",    # day/week/month boundaries on the Energy page
         EMBER_EMAIL=os.environ.get("EMBER_EMAIL"),            # optional: EPH Ember heating (hot water tank probe)
         EMBER_PASSWORD=os.environ.get("EMBER_PASSWORD"),
+        FUSIONSOLAR_USER=os.environ.get("FUSIONSOLAR_USER"),  # optional: Huawei battery & solar (FusionSolar)
+        FUSIONSOLAR_PASSWORD=os.environ.get("FUSIONSOLAR_PASSWORD"),
+        FUSIONSOLAR_SUBDOMAIN=os.environ.get("FUSIONSOLAR_SUBDOMAIN") or "region01eu5",
     )
     if test_config:
         app.config.update(test_config)
@@ -145,13 +149,45 @@ def create_app(test_config=None):
             return latest[1]
         return get_ember().zones()
 
+    # ---- optional Huawei FusionSolar (battery state of charge, solar) -----------
+    def get_fusionsolar():
+        if not (app.config.get("FUSIONSOLAR_USER") and app.config.get("FUSIONSOLAR_PASSWORD")):
+            return None
+        if "fusionsolar" not in app.extensions:
+            app.extensions["fusionsolar"] = fusionsolar.FusionSolarClient(
+                app.config["FUSIONSOLAR_USER"], app.config["FUSIONSOLAR_PASSWORD"], app.config["FUSIONSOLAR_SUBDOMAIN"],
+                session_path=os.path.join(os.path.dirname(app.config["DB_PATH"]) or ".", "fusionsolar-session.json"))
+        return app.extensions["fusionsolar"]
+
+    def app_tz():
+        try:
+            return ZoneInfo(app.config["TIMEZONE"])
+        except (ZoneInfoNotFoundError, ValueError):
+            return ZoneInfo("UTC")
+
+    def battery_now():
+        """{soc %, solar W, age s} from FusionSolar's newest 5-minute reading if it's under 20 minutes old (the
+        recorder stores one every 5 minutes; else the recorder's last current reading), or None."""
+        now = app.config.get("NOW") or time.time()
+        row = store.latest_huawei()
+        if row and now - row[0] < 1200:
+            return {"soc": row[1], "solar": row[3], "age": max(0, now - row[0])}
+        rec_ = app.extensions.get("recorder")
+        cur = rec_ and rec_.huawei_now
+        if cur and cur[1].get("soc") is not None and now - cur[0] < 1200:
+            return {"soc": cur[1]["soc"], "solar": cur[1].get("solar"), "age": now - cur[0]}
+        return None
+
     rec = None
     if app.config["RECORD"] and app.config["HUB_SERIAL"] and app.config["API_KEY"] and not app.config.get("TESTING"):
         rec = app.extensions["recorder"] = recorder.Recorder(
             store, lambda: get_client().status(), app.config["POLL_SECONDS"], app.config["RETENTION_DAYS"],
             get_history=lambda kind, sno, day: get_client().day_history(kind, sno, day),
             history_from=app.config["HISTORY_FROM"],
-            get_ember=(lambda: get_ember().zones()) if get_ember() else None)
+            get_ember=(lambda: get_ember().zones()) if get_ember() else None,
+            get_huawei_now=(lambda: get_fusionsolar().now()) if get_fusionsolar() else None,
+            get_huawei_day=(lambda d: get_fusionsolar().day(d, app_tz())) if get_fusionsolar() else None,
+            tz=app_tz())
         rec.start()
 
     # ---- live values -------------------------------------------------------
@@ -244,7 +280,7 @@ def create_app(test_config=None):
         hw = ember.hot_water(zones)
         rooms = [z for z in zones if not z["hot_water"] and z["current"] is not None]
         return {"flow": flow.build(status, show_tank_temp=show_temp, tank=hw["current"] if hw else None,
-                                   rooms=rooms), "devices": devices,
+                                   rooms=rooms, battery=battery_now()), "devices": devices,
                 "error": None,
                 "reading_utc": hub and hub["report_utc"], "reading_age": hub and hub["age_s"]}
 

@@ -30,6 +30,7 @@ A small local Flask app for investigating Harvi link problems on a myenergi syst
 - **`monitor.py`**: optional command-line logger for recording somewhere the app isn't running; its CSV can be uploaded to the report.
 
 The myenergi API used here is the community-documented, unofficial one, so field names and units may differ by firmware.
+- **Huawei battery & solar (optional, FusionSolar):** with a Huawei inverter and LUNA2000 battery, set `FUSIONSOLAR_USER`, `FUSIONSOLAR_PASSWORD` and `FUSIONSOLAR_SUBDOMAIN` (your FusionSolar owner login, and the start of the web address after you log in, e.g. `uni004eu5`). The Overview then splits the Solar & battery node into **Solar** and **Battery**. Solar is FusionSolar's latest 5-minute reading. The battery is the rest of the Harvi's live solar & battery reading, so the two always add up to what the Harvi measures and the battery responds live; at night it is exactly the Harvi reading. A ring around the Battery node shows its state of charge. If FusionSolar's newest reading is over 20 minutes old, the Overview goes back to the single combined node. The recorder stores FusionSolar's 5-minute battery state of charge, battery power and solar power, and backfills them to `HISTORY_FROM`, a few days every 5 minutes. FusionSolar publishes each reading about 5 minutes late, so these are never live. This reads the FusionSolar website with [fusion_solar_py](https://github.com/jgriss/FusionSolarPy), an unofficial client, and only reads data. The login is saved as `fusionsolar-session.json` next to the database and reused, because FusionSolar asks for a captcha after too many logins; a failed login waits 30 minutes before trying again. `scripts/fusionsolar-probe.py` checks the settings from your `.env`.
 
 ## Setup
 
@@ -166,6 +167,7 @@ caffeinate -is python monitor.py --interval 15 --stale 300 --csv overnight.csv  
 | `BEHIND_PROXY` | `1` when served through a reverse proxy such as nginx (trusts its `X-Forwarded-*` headers) |
 | `RECORD`, `POLL_SECONDS`, `RETENTION_DAYS` | Background recording on/off (default on), poll interval (default 15 s) and how many days of raw readings to keep (default 180; everything else is kept indefinitely) |
 | `HISTORY_FROM` | How far back to backfill the hub's minute-by-minute history: a date (`2026-03-24`, e.g. when the car charger was installed) or a number of days (default 365) |
+| `FUSIONSOLAR_USER`, `FUSIONSOLAR_PASSWORD`, `FUSIONSOLAR_SUBDOMAIN` | Optional Huawei FusionSolar login and web address subdomain (default `region01eu5`) for battery state of charge and solar |
 | `REFRESH_SECONDS`, `PORT` | Live-page refresh interval (default 15) and port (default 5001) |
 
 ## Tests

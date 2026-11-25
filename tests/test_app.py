@@ -10,6 +10,8 @@ import os  # noqa: E402
 # Never reach real services from the tests: values already in the environment win over the developer's .env.
 os.environ["EMBER_EMAIL"] = ""
 os.environ["EMBER_PASSWORD"] = ""
+os.environ["FUSIONSOLAR_USER"] = ""
+os.environ["FUSIONSOLAR_PASSWORD"] = ""
 
 import app as app_module  # noqa: E402
 from charts import LogFormatError, load_log  # noqa: E402
@@ -1104,6 +1106,111 @@ def money_in(html, v):
     return f"£{v:.2f}" in html
 
 
+class FakeFusionSolar:
+    """Stands in for fusionsolar.FusionSolarClient: 5-minute days of a battery discharging 1% per slot."""
+    def __init__(self):
+        self.up, self.asked = True, []
+
+    def now(self):
+        if not self.up:
+            return None
+        return {"soc": 42.0, "battery": -864.0, "solar": 0.0, "load": 841.0, "charged_kwh": 9.89,
+                "discharged_kwh": 8.89, "mode": "TOU"}
+
+    def day(self, d, tz):
+        self.asked.append(d)
+        if not self.up:
+            return None
+        start = int(datetime(d.year, d.month, d.day, tzinfo=tz).timestamp())
+        return [(start + i * 300, 90.0 - i, -500.0, 100.0) for i in range(3)]
+
+
+def test_fusionsolar_parsing_and_recording(tmp_path):
+    import fusionsolar, recorder
+    from datetime import date
+    from zoneinfo import ZoneInfo
+    flow_json = {"data": {"flow": {"nodes": [
+        {"name": "neteco.pvms.devTypeLangKey.string", "value": "1.25"},
+        {"name": "neteco.pvms.devTypeLangKey.inverter", "value": None, "devIds": ["NE=2"]},
+        {"name": "neteco.pvms.devTypeLangKey.energy_store", "value": "0.719", "devIds": ["NE=1"],
+         "deviceTips": {"SOC": "42.0", "CHARGE_CAPACITY": "9.89", "DISCHARGE_CAPACITY": "8.82",
+                        "CHARGE_MODE_VALUE": "TOU", "BATTERY_POWER": "-0.719"}},
+        {"name": "neteco.pvms.KPI.kpiView.electricalLoad", "value": "0.737"}]}}}
+    assert fusionsolar.parse_flow(flow_json) == {"soc": 42.0, "battery": -719.0, "solar": 1250.0, "load": 737.0,
+                                                 "charged_kwh": 9.89, "discharged_kwh": 8.82, "mode": "TOU"}
+    pt = lambda v, t: {"counterValue": v, "startTime": t, "period": 300}
+    rows = fusionsolar.parse_history(
+        {"30007": {"pmDataList": [pt(80.0, 0), pt(79.0, 300), pt(1.7976931348623157e+308, 600)]},
+         "30005": {"pmDataList": [pt(-0.556, 0), pt("--", 300)]}},
+        {"31001": {"pmDataList": [pt(300.0, 300)]}, "31002": {"pmDataList": [pt(2.0, 300)]},
+         "31004": {"pmDataList": [pt(100.0, 300)]}, "31005": {"pmDataList": [pt(1.0, 300)]}})
+    assert rows == [(0, 80.0, -556.0, None), (300, 79.0, None, 700.0)]     # empty slots (1.8e308, "--") skipped
+
+    # the recorder reads FusionSolar every 5 minutes: today, then a few earlier days per sync, newest first
+    tz = ZoneInfo("Europe/London")
+    st = recorder.Store(tmp_path / "h.db")
+    fake = FakeFusionSolar()
+    now = datetime(2026, 11, 25, 16, 40, tzinfo=tz).timestamp()
+    rec = recorder.Recorder(st, FakeClient().status, get_huawei_now=fake.now,
+                            get_huawei_day=lambda d: fake.day(d, tz), tz=tz, history_from=date(2026, 11, 10))
+    assert rec.sync_huawei(now) == ["2026-11-25", "2026-11-24", "2026-11-23", "2026-11-22", "2026-11-21"]
+    assert rec.huawei_now == (now, fake.now())
+    assert st.huawei_days()["2026-11-24"] and not st.huawei_days()["2026-11-25"]   # today stays incomplete
+    assert rec.sync_huawei(now + 300)[:2] == ["2026-11-25", "2026-11-20"]           # backfill carries on
+    for i in range(3):
+        rec.sync_huawei(now + 600 + i * 300)
+    assert min(st.huawei_days()) == "2026-11-10" and len(st.huawei_days()) == 16     # stops at history_from
+    start = datetime(2026, 11, 24, tzinfo=tz).timestamp()
+    assert st.huawei(start, start + 86400) == [(start, 90.0, -500.0, 100.0), (start + 300, 89.0, -500.0, 100.0),
+                                               (start + 600, 88.0, -500.0, 100.0)]
+    fake.up, last = False, rec.huawei_now                                 # FusionSolar down: nothing breaks
+    fake.asked.clear()
+    assert rec.sync_huawei(now + 3600) == [] and fake.asked == [date(2026, 11, 25)]
+    assert rec.huawei_now == last                                         # keeps the last good reading
+
+    # the Overview shows the battery's state of charge on the solar & battery node
+    a = app_module.create_app({"TESTING": True, "UPLOAD_DIR": str(tmp_path), "DB_PATH": str(tmp_path / "o.db"),
+                               "HUB_SERIAL": "1", "API_KEY": "k", "APP_PASSWORD": "", "NOW": now + 60})
+    class WithBattery(FakeClient):
+        def status(self):
+            s = super().status()
+            fresh = datetime.now(timezone.utc)                            # a quiet Harvi would count as 0 W
+            s["harvi"].append({"sno": 222, "dat": fresh.strftime("%d-%m-%Y"), "tim": fresh.strftime("%H:%M:%S"),
+                               "ectp1": 900,
+                               "ectt1": "Generation & Battery", "fwv": "3170S0.000"})
+            return s
+    a.extensions["client"] = WithBattery()
+    c = a.test_client()
+    assert "soc-ring" not in c.get("/").get_data(as_text=True)           # FusionSolar not set up: one node
+    import re
+    nodes = lambda html: dict(re.findall(r'node-label"[^>]*>([^<]+)</text>\s*<text class="node-value"[^>]*>([^<]+)<',
+                                         html))
+    a.extensions["recorder"] = rec
+    rec.huawei_now = (now, {"soc": 42.0, "solar": 300.0})                 # 900 W live = 300 W solar + 600 W battery
+    html = c.get("/").get_data(as_text=True)
+    assert nodes(html) == {"Solar": "300 W", "Battery 42%": "600 W", "Grid": "4.0 kW"}
+    assert "1 min ago" in html and 'class="soc-ring"' in html and 'stroke-dasharray="73.2 232.5"' in html
+    assert 'stroke-dasharray="174.4 232.5" transform="rotate(135 190 80)"' in html   # the 270° track
+    assert 'class="node src-solar"' in html                                # discharging: a source
+    a.config["NOW"] = now + 1300                                         # over 20 minutes old: one node again
+    html = c.get("/").get_data(as_text=True)
+    assert "Battery 42%" not in html and "Solar &amp; battery" in html
+    st_o = a.extensions["store"]                                         # the newest stored 5-minute reading wins
+    st_o.save_huawei_day("2026-11-25", [(int(now + 900), 55.0, -1200.0, 2.0)], complete=False)
+    html = c.get("/").get_data(as_text=True)
+    assert nodes(html) == {"Solar": "0 W", "Battery 55%": "900 W", "Grid": "4.0 kW"} and "7 min ago" in html
+
+    # the split itself: solar from FusionSolar (night noise ignored), the battery takes the rest, live
+    import flow
+    assert flow.split_solar(-1500, {"solar": 8.0}) == (0.0, -1500)       # night: all of it is the battery
+    assert flow.split_solar(500, {"solar": 1200.0}) == (1200.0, -700.0)   # sunny: the battery soaks up 700 W
+    v = flow.build({"harvi": [{"sno": 1, "ectp1": -1500, "ectt1": "Generation & Battery"}]},
+                   battery={"soc": 30.0, "solar": 0.0, "age": 300})
+    batt = next(n for n in v["nodes"] if n["key"] == "battery")
+    assert batt["cls"] == "load" and batt["caption"] == ["Charging"] and v["split"]
+    assert batt["link"]["angle"] == -90.0                                 # arrow points up into the battery
+
+
 if __name__ == "__main__":
     import tempfile
     for fn in (test_dashboard_and_api, test_upload_and_report, test_current_report_persists,
@@ -1116,7 +1223,8 @@ if __name__ == "__main__":
                test_quiet_solar_harvi_counts_as_zero, test_harvi_signal_metrics, test_signal_page_and_change_log,
                test_tank_temp_only_shown_once_it_changes, test_ember_tank_temperature,
                test_quick_ranges_merge_into_all_data, test_tariff_costs_and_pages,
-               test_device_import_split_between_hot_water_and_car, test_car_charging_sessions_and_costs):
+               test_device_import_split_between_hot_water_and_car, test_car_charging_sessions_and_costs,
+               test_fusionsolar_parsing_and_recording):
         with tempfile.TemporaryDirectory() as d:
             fn(Path(d))
             print("ok", fn.__name__)

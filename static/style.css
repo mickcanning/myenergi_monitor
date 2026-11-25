@@ -112,8 +112,8 @@ button.secondary { background:var(--card); color:var(--ink); border:1px solid va
 .flow { margin:0 auto; max-width:480px; }
 .flow svg { width:100%; height:auto; display:block; overflow:visible; }
 .flow figcaption { text-align:center; font-size:.8em; margin-top:.3rem; }
-.flow { --solar:#1baf7a; --grid:#c2410c; --load:#2a78d6; }
-:root[data-theme="dark"] .flow { --solar:#199e70; --grid:#f29a55; --load:#3987e5; }
+.flow { --solar:#1baf7a; --grid:#c2410c; --load:#2a78d6; --soc:#2f3fb8; }
+:root[data-theme="dark"] .flow { --solar:#199e70; --grid:#f29a55; --load:#3987e5; --soc:#8f9cf7; }
 .flow .link { stroke:var(--line); stroke-width:3; stroke-linecap:round; }
 .flow .link.src-solar { stroke:var(--solar); } .flow .link.src-grid { stroke:var(--grid); } .flow .link.load { stroke:var(--load); }
 .flow .link:not(.idle) { stroke-width:4; stroke-opacity:.75; }
@@ -122,6 +122,8 @@ button.secondary { background:var(--card); color:var(--ink); border:1px solid va
 .flow .node.src-solar > circle { stroke:var(--solar); } .flow .node.src-grid > circle { stroke:var(--grid); } .flow .node.load > circle { stroke:var(--load); }
 .flow .icon { fill:none; stroke:var(--ink); stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
 .flow .node.idle .icon { stroke:var(--ink2); }
+.flow .node > circle.soc-track { fill:none; stroke:var(--line); stroke-width:4; stroke-linecap:round; }
+.flow .node > circle.soc-ring { fill:none; stroke:var(--soc); stroke-width:4; stroke-linecap:round; }
 .flow .icon .tyre { fill:var(--ink); stroke:var(--card); stroke-width:1; }        /* solid wheels: white on dark */
 .flow .node.idle .icon .tyre { fill:var(--ink2); }
 .flow .hub-ring { fill:var(--card); stroke:var(--solar); stroke-width:3; }
