@@ -388,6 +388,11 @@ class Store:
         return self._conn().execute("SELECT ts, soc, battery, solar FROM huawei WHERE ts >= ? AND ts < ? ORDER BY ts",
                                     (int(start_ts), int(end_ts))).fetchall()
 
+    def huawei_battery_avg(self, start_ts, end_ts):
+        """(mean battery W, readings) from FusionSolar's 5-minute readings in [start, end)."""
+        return self._conn().execute("SELECT AVG(battery), COUNT(battery) FROM huawei WHERE ts >= ? AND ts < ?",
+                                    (int(start_ts), int(end_ts))).fetchone()
+
     def latest_huawei(self):
         """(ts, soc, battery W, solar W) of the newest reading with a state of charge, or None."""
         return self._conn().execute(

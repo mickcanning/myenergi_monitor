@@ -173,7 +173,9 @@ def _zappi_caption(rec):
 
 
 # Layout in a 380 x 430 viewBox: sources across the top, the hub in the middle, loads across the bottom.
-CENTRE, HUB_R, NODE_R = (190, 205), 42, 32
+# Above each top node: its label, power, then up to two status lines; below each bottom node the same, reversed.
+TOP_Y, BOTTOM_Y, HEIGHT = 115, 353, 465
+CENTRE, HUB_R, NODE_R = (190, 240), 42, 32
 SOC_R = 37             # the battery's state-of-charge gauge, just outside its node
 GAUGE_START, GAUGE_SWEEP = 135, 270     # degrees, clockwise from east: 0% at bottom-left, 100% at bottom-right
 
@@ -228,6 +230,33 @@ def soc_gauge(pos, soc):
             "rotate": f"{GAUGE_START} {x} {y}"}
 
 
+def battery_runtime(soc, live_w, avg_w, n, capacity_kwh, reserve=20):
+    """How long until the battery reaches its reserve (discharging) or full (charging):
+    (seconds, "to 20%" / "to full") or None.
+
+    live_w is the battery's live power (+ discharging, as on the Overview). The rate is avg_w, FusionSolar's mean
+    battery power over the last half hour (+ charging; at least 3 readings), so a kettle doesn't swing the
+    estimate; the live power is used when there's no such average yet or the battery has changed direction."""
+    if not capacity_kwh or soc is None or abs(live_w) < IDLE_W:
+        return None
+    discharging = live_w > 0
+    rate = -avg_w if avg_w is not None and n and n >= 3 else None    # + discharging, like live_w
+    if rate is None or (rate > 0) != discharging or abs(rate) < IDLE_W:
+        rate = live_w
+    left_pct = soc - reserve if discharging else 100 - soc
+    if left_pct <= 0:
+        return None
+    return left_pct / 100 * capacity_kwh * 3.6e6 / abs(rate), (f"to {reserve:g}%" if discharging else "to full")
+
+
+def fmt_hours(s):
+    """11400 -> '3 h 10 min', 2700 -> '45 min'."""
+    m = int(round(s / 60 / 5) * 5) if s >= 3600 else max(1, int(round(s / 60)))
+    if s >= 48 * 3600:
+        return "over 2 days"
+    return f"{m // 60} h {m % 60:02d} min" if m >= 60 else f"{m} min"
+
+
 def build(status, show_tank_temp=False, tank=None, rooms=None, battery=None):
     """Everything the Overview template draws. `battery` ({soc, solar W, age s} from FusionSolar) splits the
     solar & battery node into Solar and Battery; without it there's one combined node."""
@@ -238,19 +267,25 @@ def build(status, show_tank_temp=False, tank=None, rooms=None, battery=None):
         link = _link(pos, w, outward, cls, extra.pop("edge", NODE_R + 4))
         nodes.append({"key": key, "x": pos[0], "y": pos[1], "label": label, "value": fmt_power(w),
                       "caption": caption, "icon": ICONS[extra.pop("icon", key)], "link": link, "active": link["active"],
-                      "cls": link["cls"], "top": top, "show_caption": True, **extra})
+                      "cls": link["cls"], "top": top, **extra})
 
     split = v["solar"] is not None and battery is not None and battery.get("soc") is not None
     if split:
         s, b = split_solar(v["solar"], battery)
         mins = max(1, round((battery.get("age") or 0) / 60))
-        add("solar", (62, 80), "Solar", s, ["Generating" if s >= IDLE_W else "Idle", f"{mins} min ago"], False,
+        add("solar", (62, TOP_Y), "Solar", s, ["Generating" if s >= IDLE_W else "Idle", f"{mins} min ago"], False,
             "src-solar", True, icon="sun")
         soc = max(0.0, min(100.0, battery["soc"]))
         state = "Charging" if b <= -IDLE_W else "Discharging" if b >= IDLE_W else "Idle"
         # charging draws power from the hub like a load; discharging supplies it like a source
-        add("battery", (190, 80), f"Battery {soc:.0f}%", b, [state], False, "src-solar" if b > 0 else "load",
-            True, show_caption=False, soc=soc, edge=SOC_R + 5, gauge=soc_gauge((190, 80), soc))
+        rt = battery_runtime(soc, b, battery.get("avg_w"), battery.get("n"), battery.get("capacity"),
+                             battery.get("reserve", 20))
+        if rt is None and b >= IDLE_W and soc <= battery.get("reserve", 20):
+            more = ["At reserve"]
+        else:
+            more = [f"{fmt_hours(rt[0])} {rt[1]}"] if rt else []
+        add("battery", (190, TOP_Y), "Battery", b, [state] + more, False, "src-solar" if b > 0 else "load", True,
+            soc=soc, inner=f"{soc:.0f}%", edge=SOC_R + 5, gauge=soc_gauge((190, TOP_Y), soc))
     elif v["solar"] is not None:
         s = v["solar"]
         if v["solar_stale"]:
@@ -261,17 +296,17 @@ def build(status, show_tank_temp=False, tank=None, rooms=None, battery=None):
             cap = "Generating"
         else:
             cap = "Idle"
-        add("solar", (85, 80), "Solar & battery" if v["solar_has_battery"] else "Solar", s, [cap], False,
+        add("solar", (85, TOP_Y), "Solar & battery" if v["solar_has_battery"] else "Solar", s, [cap], False,
             "src-solar", True)
     if v["grid"] is not None:
         g = v["grid"]
         cap = "Importing" if g >= IDLE_W else "Exporting" if g <= -IDLE_W else "Idle"
-        add("grid", (318 if split else 295, 80), "Grid", g, [cap], False, "src-grid" if g > 0 else "src-solar", True)
+        add("grid", (318 if split else 295, TOP_Y), "Grid", g, [cap], False, "src-grid" if g > 0 else "src-solar", True)
 
     bottom = [k for k in ("home", "eddi", "zappi") if v[k] is not None]
     xs = {1: [190], 2: [115, 265], 3: [62, 190, 318]}.get(len(bottom), [])
     for k, x in zip(bottom, xs):
-        w, y = v[k], 318
+        w, y = v[k], BOTTOM_Y
         if k == "home":
             cap = [f"{r['name']} {r['current']:.1f} °C" for r in (rooms or [])[:2]] or \
                 ["Using" if w >= IDLE_W else "Idle"]           # room temperatures from the heating system
@@ -281,5 +316,5 @@ def build(status, show_tank_temp=False, tank=None, rooms=None, battery=None):
         else:
             add(k, (x, y), "Car", w, _zappi_caption(v["zappi_rec"]), True, "load", False)
 
-    return {"nodes": nodes, "self_pct": v["self_pct"], "centre": CENTRE, "hub_r": HUB_R, "node_r": NODE_R, "soc_r": SOC_R,
+    return {"nodes": nodes, "self_pct": v["self_pct"], "centre": CENTRE, "height": HEIGHT, "hub_r": HUB_R, "node_r": NODE_R, "soc_r": SOC_R,
             "values": v, "split": split}

@@ -1188,17 +1188,17 @@ def test_fusionsolar_parsing_and_recording(tmp_path):
     a.extensions["recorder"] = rec
     rec.huawei_now = (now, {"soc": 42.0, "solar": 300.0})                 # 900 W live = 300 W solar + 600 W battery
     html = c.get("/").get_data(as_text=True)
-    assert nodes(html) == {"Solar": "300 W", "Battery 42%": "600 W", "Grid": "4.0 kW"}
+    assert nodes(html) == {"Solar": "300 W", "Battery": "600 W", "Grid": "4.0 kW"} and '>42%</text>' in html
     assert "1 min ago" in html and 'class="soc-ring"' in html and 'stroke-dasharray="73.2 232.5"' in html
-    assert 'stroke-dasharray="174.4 232.5" transform="rotate(135 190 80)"' in html   # the 270° track
+    assert 'stroke-dasharray="174.4 232.5" transform="rotate(135 190 115)"' in html   # the 270° track
     assert 'class="node src-solar"' in html                                # discharging: a source
     a.config["NOW"] = now + 1300                                         # over 20 minutes old: one node again
     html = c.get("/").get_data(as_text=True)
-    assert "Battery 42%" not in html and "Solar &amp; battery" in html
+    assert "soc-ring" not in html and "Solar &amp; battery" in html
     st_o = a.extensions["store"]                                         # the newest stored 5-minute reading wins
     st_o.save_huawei_day("2026-11-25", [(int(now + 900), 55.0, -1200.0, 2.0)], complete=False)
     html = c.get("/").get_data(as_text=True)
-    assert nodes(html) == {"Solar": "0 W", "Battery 55%": "900 W", "Grid": "4.0 kW"} and "7 min ago" in html
+    assert nodes(html) == {"Solar": "0 W", "Battery": "900 W", "Grid": "4.0 kW"} and "7 min ago" in html
 
     # the split itself: solar from FusionSolar (night noise ignored), the battery takes the rest, live
     import flow
@@ -1209,6 +1209,26 @@ def test_fusionsolar_parsing_and_recording(tmp_path):
     batt = next(n for n in v["nodes"] if n["key"] == "battery")
     assert batt["cls"] == "load" and batt["caption"] == ["Charging"] and v["split"]
     assert batt["link"]["angle"] == -90.0                                 # arrow points up into the battery
+
+    # time left: the charge above the 20% reserve at the last half hour's average rate (kettle-proof)
+    assert fusionsolar.rated_capacity([{"name": "SOC", "realValue": "42"},
+                                       {"name": "Rated capacity", "realValue": "13.800", "value": "13.800"}]) == 13.8
+    assert flow.battery_runtime(42, 3000, -750, 6, 13.8) == (22 / 100 * 13.8 * 3.6e6 / 750, "to 20%")  # 4 h 03 min
+    assert flow.battery_runtime(42, 864, -750, 2, 13.8)[0] == 22 / 100 * 13.8 * 3.6e6 / 864     # too few: live
+    assert flow.battery_runtime(42, 864, 2000, 6, 13.8)[0] == 22 / 100 * 13.8 * 3.6e6 / 864     # was charging: live
+    assert flow.battery_runtime(40, -2760, 2760, 6, 13.8) == (60 / 100 * 13.8 * 3.6e6 / 2760, "to full")  # 3 h
+    assert flow.battery_runtime(42, 864, -750, 6, None) is None and flow.battery_runtime(42, 5, -750, 6, 13.8) is None
+    assert flow.battery_runtime(19, 500, -500, 6, 13.8) is None
+    assert [flow.fmt_hours(x) for x in (40, 2700, 14592, 3 * 86400)] == ["1 min", "45 min", "4 h 05 min",
+                                                                          "over 2 days"]
+    st_o.save_huawei_day("2026-11-25", [(int(now + 900 - k * 300), 55.0, -1200.0, 2.0) for k in range(1, 6)],
+                         complete=False)
+    rec.huawei_now = (now + 900, {"soc": 55.0, "capacity_kwh": 13.8})
+    html = c.get("/").get_data(as_text=True)                             # 35% of 13.8 kWh at 1.2 kW = 4.03 h, to 5 min
+    assert '>4 h 00 min to 20%</text>' in html
+    v = flow.build({"harvi": [{"sno": 1, "ectp1": 300, "ectt1": "Generation & Battery"}]},
+                   battery={"soc": 20.0, "solar": 0.0, "age": 300, "capacity": 13.8})
+    assert next(n for n in v["nodes"] if n["key"] == "battery")["caption"] == ["Discharging", "At reserve"]
 
 
 if __name__ == "__main__":

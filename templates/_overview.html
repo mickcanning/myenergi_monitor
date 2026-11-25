@@ -7,9 +7,9 @@
   <span id="status"></span>
 </p>
 <figure class="flow">
-  <svg viewBox="0 0 380 430" role="img" aria-labelledby="flow-title">
+  <svg viewBox="0 0 380 {{ flow.height }}" role="img" aria-labelledby="flow-title">
     <title id="flow-title">Power flow:
-      {% for n in flow.nodes %}{{ n.label }} {{ n.value }} {{ n.caption | join(", ") }}{{ '; ' if not loop.last }}{% endfor %}.
+      {% for n in flow.nodes %}{{ n.label }} {{ n.inner ~ ' ' if n.inner }}{{ n.value }} {{ n.caption | join(", ") }}{{ '; ' if not loop.last }}{% endfor %}.
       {% if flow.self_pct is not none %}{{ flow.self_pct }}% self-powered.{% endif %}</title>
     {% for n in flow.nodes %}{% set l = n.link %}
     <line class="link {{ l.cls }}" x1="{{ l.x1 }}" y1="{{ l.y1 }}" x2="{{ l.x2 }}" y2="{{ l.y2 }}"/>
@@ -43,11 +43,16 @@
       <circle class="soc-track" cx="{{ n.x }}" cy="{{ n.y }}" r="{{ flow.soc_r }}" stroke-dasharray="{{ gg.track }}" transform="rotate({{ gg.rotate }})"/>
       <circle class="soc-ring" cx="{{ n.x }}" cy="{{ n.y }}" r="{{ flow.soc_r }}" stroke-dasharray="{{ gg.fill }}" transform="rotate({{ gg.rotate }})"/>
       {% endif %}
+      {% if n.inner %}
+      <g class="icon" transform="translate({{ n.x - 18 }} {{ n.y - 24 }}) scale(1.5)">{{ n.icon | safe }}</g>
+      <text class="node-inner" x="{{ n.x }}" y="{{ n.y + 19 }}" text-anchor="middle">{{ n.inner }}</text>
+      {% else %}
       <g class="icon" transform="translate({{ n.x - 18 }} {{ n.y - 18 }}) scale(1.5)">{{ n.icon | safe }}</g>
+      {% endif %}
       {% if n.top %}
-      <text class="node-label" x="{{ n.x }}" y="{{ n.y - 64 }}" text-anchor="middle">{{ n.label }}</text>
-      <text class="node-value" x="{{ n.x }}" y="{{ n.y - 44 }}" text-anchor="middle">{{ n.value }}</text>
-      {% if n.show_caption %}{% for line in n.caption %}<text class="node-cap" x="{{ n.x }}" y="{{ n.y + 52 + loop.index0 * 13 }}" text-anchor="middle">{{ line }}</text>{% endfor %}{% endif %}
+      <text class="node-label" x="{{ n.x }}" y="{{ n.y - 99 }}" text-anchor="middle">{{ n.label }}</text>
+      <text class="node-value" x="{{ n.x }}" y="{{ n.y - 79 }}" text-anchor="middle">{{ n.value }}</text>
+      {% for line in n.caption[:2] %}<text class="node-cap" x="{{ n.x }}" y="{{ n.y - 61 + loop.index0 * 13 }}" text-anchor="middle">{{ line }}</text>{% endfor %}
       {% else %}
       <text class="node-value" x="{{ n.x }}" y="{{ n.y + 56 }}" text-anchor="middle">{{ n.value }}</text>
       <text class="node-label" x="{{ n.x }}" y="{{ n.y + 74 }}" text-anchor="middle">{{ n.label }}</text>

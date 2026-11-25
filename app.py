@@ -100,6 +100,8 @@ def create_app(test_config=None):
         FUSIONSOLAR_USER=os.environ.get("FUSIONSOLAR_USER"),  # optional: Huawei battery & solar (FusionSolar)
         FUSIONSOLAR_PASSWORD=os.environ.get("FUSIONSOLAR_PASSWORD"),
         FUSIONSOLAR_SUBDOMAIN=os.environ.get("FUSIONSOLAR_SUBDOMAIN") or "region01eu5",
+        BATTERY_RESERVE=float(os.environ.get("BATTERY_RESERVE") or 20),  # % the battery stops discharging at
+        BATTERY_KWH=float(os.environ.get("BATTERY_KWH") or 0) or None,  # capacity, if FusionSolar doesn't say
     )
     if test_config:
         app.config.update(test_config)
@@ -166,17 +168,24 @@ def create_app(test_config=None):
             return ZoneInfo("UTC")
 
     def battery_now():
-        """{soc %, solar W, age s} from FusionSolar's newest 5-minute reading if it's under 20 minutes old (the
-        recorder stores one every 5 minutes; else the recorder's last current reading), or None."""
+        """FusionSolar's newest 5-minute reading if it's under 20 minutes old (the recorder stores one every 5
+        minutes; else the recorder's last current reading), or None: {soc %, solar W, age s, capacity kWh,
+        reserve %, avg_w: mean battery W (+ charging) over the last 30 minutes, n: readings in that mean}."""
         now = app.config.get("NOW") or time.time()
-        row = store.latest_huawei()
-        if row and now - row[0] < 1200:
-            return {"soc": row[1], "solar": row[3], "age": max(0, now - row[0])}
         rec_ = app.extensions.get("recorder")
         cur = rec_ and rec_.huawei_now
-        if cur and cur[1].get("soc") is not None and now - cur[0] < 1200:
-            return {"soc": cur[1]["soc"], "solar": cur[1].get("solar"), "age": now - cur[0]}
-        return None
+        fs = app.extensions.get("fusionsolar")
+        extra = {"capacity": (cur and cur[1].get("capacity_kwh")) or (fs and fs.capacity_kwh)
+                 or app.config.get("BATTERY_KWH"), "reserve": app.config.get("BATTERY_RESERVE", 20)}
+        row = store.latest_huawei()
+        if row and now - row[0] < 1200:
+            out = {"soc": row[1], "solar": row[3], "age": max(0, now - row[0])}
+        elif cur and cur[1].get("soc") is not None and now - cur[0] < 1200:
+            out = {"soc": cur[1]["soc"], "solar": cur[1].get("solar"), "age": now - cur[0]}
+        else:
+            return None
+        avg, n = store.huawei_battery_avg(now - 1800 - 600, now)    # readings are published ~5-10 min late
+        return {**out, **extra, "avg_w": avg, "n": n}
 
     rec = None
     if app.config["RECORD"] and app.config["HUB_SERIAL"] and app.config["API_KEY"] and not app.config.get("TESTING"):

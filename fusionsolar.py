@@ -60,6 +60,14 @@ def parse_flow(flow):
     return out
 
 
+def rated_capacity(signals):
+    """The battery's rated capacity in kWh from its status signals, or None."""
+    for s in signals or []:
+        if "rated capacity" in str(s.get("name", "")).lower():
+            return _f(s.get("realValue", s.get("value")))
+    return None
+
+
 def _points(sig):
     """{slot start (unix s): value} from one device-history signal, skipping empty slots."""
     out = {}
@@ -92,6 +100,7 @@ class FusionSolarClient:
         self.session_path = session_path
         self._client = None
         self._ids = None                 # (plant, battery, inverter)
+        self.capacity_kwh = None         # the battery's rated capacity, read once
         self._lock = threading.Lock()
         self._no_login_until = 0.0
         self.last_error = None
@@ -161,10 +170,12 @@ class FusionSolarClient:
 
     # -- data ---------------------------------------------------------------------
     def now(self):
-        """parse_flow() of the plant's current energy flow, or None."""
+        """parse_flow() of the plant's current energy flow plus the battery's capacity_kwh, or None."""
         def get(c):
-            plant = self._find_ids(c)[0]
-            return parse_flow(c.get_plant_flow(plant))
+            plant, battery, _ = self._find_ids(c)
+            if self.capacity_kwh is None and battery:
+                self.capacity_kwh = rated_capacity(c.get_battery_status(battery))
+            return {**parse_flow(c.get_plant_flow(plant)), "capacity_kwh": self.capacity_kwh}
         return self._call(get)
 
     def day(self, d, tz):
